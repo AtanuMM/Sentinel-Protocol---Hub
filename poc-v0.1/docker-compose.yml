@@ -1,20 +1,23 @@
 version: '3.8'
 
 services:
-  # 1. S3 SIMULATOR (MinIO with Web UI)
+# 1. S3 SIMULATOR (MinIO AIStor Enterprise Free Tier)
   # UI: http://localhost:9001 | API: http://localhost:9000
   minio:
-    image: minio/minio
+    image: quay.io/minio/aistor/minio:latest
     container_name: sentinel-s3
     ports:
       - "9000:9000"
       - "9001:9001"
     environment:
-      MINIO_ROOT_USER: root
+      MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin
     volumes:
       - ./minio_data:/data
-    command: server /data --console-address ":9001"
+      # SENIOR DEV WARNING: The minio.license file MUST exist in the same folder 
+      # as your docker-compose.yml BEFORE you start the container.
+      - ./minio.license:/minio.license:ro
+    command: server /data --console-address ":9001" --license /minio.license
 
   # 2. THE TRACE DATABASE (Aurora PostgreSQL Simulation)
   # Host: localhost | Port: 5432

@@ -6,6 +6,8 @@ const Redis = require('ioredis');
 const { Kafka } = require('kafkajs');
 const { v4: uuidv4 } = require('uuid');
 const { Sequelize, DataTypes } = require('sequelize');
+const { pipeline } = require('stream/promises'); // For memory-safe streaming
+const { Readable } = require('stream');
 
 fastify.register(cors, { origin: '*' });
 
@@ -43,7 +45,7 @@ const minioClient = new Minio.Client({
     endPoint: process.env.MINIO_ENDPOINT || 'localhost',
     port: 9000,
     useSSL: false,
-    accessKey: process.env.MINIO_ACCESS_KEY || 'root', // Updated to standard community root
+    accessKey: process.env.MINIO_ACCESS_KEY || 'minioadmin', // Updated to standard community root
     secretKey: process.env.MINIO_SECRET_KEY || 'minioadmin'
 });
 
@@ -214,39 +216,94 @@ fastify.get('/api/live-feed', async (request, reply) => {
 });
 
 // --- 4. MINIO WEBHOOK: THE HARVESTER ---
-fastify.post('/webhook', async (request, reply) => {
-    const event = request.body.Records[0];
-    const sourcePath = decodeURIComponent(event.s3.object.key);
-    if (sourcePath.endsWith('.sentinel_ready')) return { status: 'ignored' };
+fastify.post('/api/webhook', async (request, reply) => {
+    // 1. Initial validation of the MinIO event
+    const record = request.body.Records?.[0];
+    if (!record) return { status: 'ignored', reason: 'no_records' };
 
-    const [orgId, zoneId, folderDate] = sourcePath.split('/');
+    const sourceBucket = record.s3.bucket.name;
+    const sourcePath = decodeURIComponent(record.s3.object.key.replace(/\+/g, ' '));
+    const etag = record.s3.object.eTag;
+
+    // 2. Filter out sentinel/meta files
+    if (sourcePath.endsWith('.sentinel_ready') || sourcePath.endsWith('.sentinel_root')) {
+        return { status: 'ignored' };
+    }
+
+    // 3. Extract path parts: {OrgId}/{ZoneId}/{FolderDate}/{FileName}
+    const pathParts = sourcePath.split('/');
+    if (pathParts.length < 4) return reply.code(400).send({ error: 'Invalid Path Structure' });
+
+    const [orgId, zoneId, folderDate] = pathParts;
     const today = new Date().toISOString().split('T')[0];
 
-    if (folderDate !== today) return reply.code(400).send({ error: 'Stale Date Partition' });
+    // 4. Stale Date Check
+    if (folderDate !== today) {
+        return reply.code(400).send({ error: 'Stale Date Partition' });
+    }
 
     try {
-        // ORM Query instead of Raw SQL
+        // 5. REDIS DEDUPLICATION: Check if this file was already processed
+        const redisKey = `file:dedup:${etag}`;
+        const isDuplicate = await redis.get(redisKey);
+        if (isDuplicate) {
+            console.log(`[HARVESTER] 🛡️ Duplicate file detected (eTag: ${etag}). Skipping.`);
+            return { status: 'ignored', reason: 'duplicate' };
+        }
+
+        // 6. DB CHECK: Ensure the TPA is authorized
         const channel = await IngestionChannel.findByPk(orgId);
         if (!channel) return reply.code(403).send({ error: 'Channel Not Registered' });
 
-        const etag = event.s3.object.eTag;
-        if (await redis.get(`file:${etag}`)) return { message: 'Duplicate' };
-
+        // 7. LANDING CONFIG: Define UUID and landing path
         const traceId = uuidv4();
+        const landingBucket = 'sentinel-landing-bucket';
+        // Requirement: TPA ID -> ZONE -> date -> raw -> traceId.pdf
         const landingPath = `${orgId}/${zoneId}/${today}/raw/${traceId}.pdf`;
-        
-        const dataStream = await minioClient.getObject('tpa-source-sim', sourcePath);
-        await minioClient.putObject('internal-landing-zone', landingPath, dataStream);
 
+        console.log(`[HARVESTER] 📦 Streaming: ${sourcePath} -> ${landingPath}`);
+
+        // 8. THE STREAMING BRIDGE (Source -> Fastify -> Landing)
+        // We get the readable stream from the source MinIO
+        const dataStream = await minioClient.getObject(sourceBucket, sourcePath);
+
+        // We pipe the dataStream into the putObject sink. 
+        // pipeline() ensures that if one stream fails, both are destroyed properly to prevent memory leaks.
+        await pipeline(
+            dataStream,
+            async function* (source) {
+                // This wrapper allows minioClient.putObject to consume the stream
+                await minioClient.putObject(landingBucket, landingPath, Readable.from(source));
+            }
+        );
+
+        // 9. CLEANUP: Delete from source only after successful landing
+        await minioClient.removeObject(sourceBucket, sourcePath);
+
+        // 10. KAFKA: Notify the next process (The Parser/Validator)
         await producer.send({
             topic: 'claims-ingestion-trace',
-            messages: [{ value: JSON.stringify({ traceId, orgId, landingPath }) }]
+            messages: [{ 
+                key: orgId,
+                value: JSON.stringify({ 
+                    traceId, 
+                    orgId, 
+                    zoneId, 
+                    landingPath, 
+                    originalPath: sourcePath,
+                    timestamp: new Date().toISOString() 
+                }) 
+            }]
         });
-        await redis.set(`file:${etag}`, 'processed', 'EX', 86400);
 
-        return { status: 'success', traceId };
+        // 11. REDIS MARK: Set processed with 24hr expiry
+        await redis.set(redisKey, 'processed', 'EX', 86400);
+
+        return { status: 'success', traceId, path: landingPath };
+
     } catch (err) {
-        return reply.code(500).send({ error: 'Pipeline Crash' });
+        console.error(`[HARVESTER] 💀 Pipeline Crash:`, err);
+        return reply.code(500).send({ error: 'Pipeline Crash', message: err.message });
     }
 });
 
