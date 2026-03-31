@@ -1,9 +1,45 @@
 // src/data/mockData.js
 
 export const channelStats = [
-  { id: 'whatsapp', label: 'WhatsApp', count: 30, color: 'bg-green-500' },
-  { id: 'email', label: 'Email', count: 50, color: 'bg-blue-500' },
-  { id: 'ftp', label: 'FTP Server', count: 200, color: 'bg-purple-500' }
+  { 
+    id: 'whatsapp', 
+    title: 'WhatsApp', 
+    count: 30, 
+    description: 'Encrypted messaging gateway for instant claim submission.',
+    status: 'PROCESSING',
+    colorClass: 'text-emerald-400',
+    bgClass: 'bg-emerald-400',
+    hexColor: '#34d399' 
+  },
+  { 
+    id: 'email', 
+    title: 'Email', 
+    count: 50, 
+    description: 'Corporate relay for batch PDF processing and TPA sync.',
+    status: 'SYNCING',
+    colorClass: 'text-blue-400',
+    bgClass: 'bg-blue-400',
+    hexColor: '#60a5fa' 
+  },
+  { 
+    id: 'ftp', 
+    title: 'FTP Server', 
+    count: 200, 
+    description: 'Direct hospital portal bridge for high-volume claim datasets.',
+    status: 'STANDBY',
+    colorClass: 'text-purple-400',
+    bgClass: 'bg-purple-400',
+    hexColor: '#c084fc' 
+  }
+];
+
+// New Data for the Bar Chart
+export const processingTrendsData = [
+  { time: '08:00', volume: 40 },
+  { time: '12:00', volume: 65 },
+  { time: '16:00', volume: 85 },
+  { time: '20:00', volume: 110 },
+  { time: '00:00', volume: 55 },
 ];
 
 export const fileQueue = [

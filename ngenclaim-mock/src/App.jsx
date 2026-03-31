@@ -8,9 +8,10 @@ import DashboardLayout from './components/layout/DashboardLayout';
 // Pages
 import Gateway from './pages/Gateway';
 import Login from './pages/Login';
+import Dashboard from './pages/Dashboard';
 
 // Placeholders
-const Dashboard = () => <div className="text-white text-2xl font-bold">Data Influx Dashboard</div>;
+// const Dashboard = () => <div className="text-white text-2xl font-bold">Data Influx Dashboard</div>;
 const MDM = () => <div className="text-white text-2xl font-bold">MDM Engine Orchestration</div>;
 const UserMgmt = () => <div className="text-white text-2xl font-bold">User Access Control</div>;
 
