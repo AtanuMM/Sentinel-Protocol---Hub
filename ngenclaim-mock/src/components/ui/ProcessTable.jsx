@@ -1,21 +1,59 @@
 import React, { useState, useEffect } from 'react';
-import { FileText, Database, MessageSquare, MoreVertical, Eye, X, Download, AtSign } from 'lucide-react';
+// We no longer need Document, Page, or pdfjs imports
+import { FileText, Database, MessageSquare, MoreVertical, Eye, X, Download, AtSign, FileJson } from 'lucide-react';
 
 // Mock JSON data to display in the modal
 const mockJsonData = {
-  batch_id: "HOSP_BATCH_7_XTR",
-  status: "PROCESSED",
-  timestamp: "2026-04-01T14:15:22Z",
-  records_processed: 1450,
-  success_rate: 99.8,
-  data_preview: [
-    { patient_id: "P-1001", claim_amount: 450.00, status: "APPROVED", diag_code: "J01.90" },
-    { patient_id: "P-1002", claim_amount: 1200.50, status: "PENDING_REVIEW", diag_code: "M54.5" }
-  ],
-  metadata: {
-    source: "FTP Server",
-    encryption: "AES-256-GCM",
-    integrity_hash: "a9f8b7c6d5e4f3a2b1c098d7e6f5a4b3"
+  "extraction_summary": {
+    "file_name": "Sample filled Claim Form.pdf",
+    "tpa_name": "PARAMOUNT HEALTH SERVICES & INSURANCE TPA PRIVATE LIMITED",
+    "status": "PROCESSED",
+    "extraction_timestamp": "2026-04-01T19:29:00Z"
+  },
+  "primary_insured_details": {
+    "policy_no": "12345678",
+    "tpa_id_no": "LMN1234",
+    "name": "XYZ",
+    "address": "ADDRESS",
+    "city": "MAHARASHTRA",
+    "pin_code": "4000",
+    "email_id": "xyz@gmail.com",
+    "pan": "ABCDEF5555"
+  },
+  "patient_hospitalized_details": {
+    "name": "FIRST NAME SURNAME E NAME",
+    "gender": "Female",
+    "relationship_to_primary_insured": "Spouse",
+    "occupation": "Service",
+    "hospital_name": "HOSP N"
+  },
+  "hospitalization_info": {
+    "room_category": "Day care",
+    "hospitalization_due_to": "Injury",
+    "injury_cause": "Self inflicted",
+    "date_of_admission": "DD/MM/YY",
+    "time_of_admission": "HH:MM",
+    "date_of_discharge": "DD/MM/YY",
+    "time_of_discharge": "HH:MM"
+  },
+  "claim_expenses_summary": {
+    "pre_hospitalization": 7000,
+    "hospitalization": 0,
+    "post_hospitalization": 5,
+    "total_claimed_amount": 19500,
+    "pre_hospitalization_period_days": "07"
+  },
+  "bank_details": {
+    "bank_name": "ABCDEFG",
+    "account_number": "XXXXXXXXXXXX",
+    "ifsc_code": "ABCD0123456"
+  },
+  "submitted_documents_checklist": {
+    "claim_form_signed": "Y",
+    "hospital_main_bill": "Y",
+    "hospital_breakup_bill": "Y",
+    "hospital_discharge_summary": "Y",
+    "pharmacy_bill": "Y"
   }
 };
 
@@ -74,18 +112,15 @@ const ProcessTable = () => {
     }
   ]);
 
-  // Logic: Increase 1% every 2 seconds
   useEffect(() => {
     const timer = setInterval(() => {
       setQueue(prevQueue => prevQueue.map(file => {
-        // Cap at 99% for non-complete files to keep the "View JSON" locked
         if (file.progress < 99 && file.status !== 'COMPLETE') {
           return { ...file, progress: file.progress + 1 };
         }
         return file;
       }));
-    }, 2000); // 2-second interval
-
+    }, 2000);
     return () => clearInterval(timer);
   }, []);
 
@@ -116,7 +151,6 @@ const ProcessTable = () => {
   return (
     <>
       <div className="bg-[#0B1224]/80 border border-white/5 rounded-2xl overflow-hidden backdrop-blur-md">
-        {/* Table Header */}
         <div className="p-6 border-b border-white/5 flex justify-between items-center">
           <h3 className="text-lg font-bold text-white uppercase tracking-widest">Queue Management</h3>
           <div className="flex items-center gap-2 text-[10px] font-bold text-emerald-400 uppercase tracking-tighter">
@@ -138,7 +172,6 @@ const ProcessTable = () => {
             <tbody>
               {queue.map((file) => (
                 <tr key={file.id} className="bg-white/[0.02] hover:bg-white/[0.05] transition-colors group">
-                  {/* File Info */}
                   <td className="py-4 px-4 rounded-l-xl border-y border-l border-white/5">
                     <div className="flex items-center gap-3">
                       <div className="p-2.5 bg-white/5 rounded-lg text-gray-400 group-hover:text-white transition-colors">
@@ -150,16 +183,12 @@ const ProcessTable = () => {
                       </div>
                     </div>
                   </td>
-
-                  {/* Source */}
                   <td className="py-4 px-4 border-y border-white/5">
                     <div className="flex items-center gap-2 text-xs font-medium text-gray-300">
                       {getIcon(file.type)}
                       {file.channel}
                     </div>
                   </td>
-
-                  {/* Progress Bar Container */}
                   <td className="py-4 px-4 border-y border-white/5">
                     <div className="flex justify-between items-center mb-1.5">
                       <span className={`text-[9px] font-black uppercase tracking-widest ${file.progress === 100 ? 'text-purple-400' : 'text-emerald-400'}`}>
@@ -174,8 +203,6 @@ const ProcessTable = () => {
                       />
                     </div>
                   </td>
-
-                  {/* View JSON Button */}
                   <td className="py-4 px-4 rounded-r-xl border-y border-r border-white/5 text-right">
                     <div className="flex items-center justify-end gap-2">
                       <button 
@@ -201,54 +228,59 @@ const ProcessTable = () => {
         </div>
       </div>
 
-      {/* JSON Viewer Modal */}
       {isModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#050914]/80 backdrop-blur-sm">
-          <div className="bg-[#0B1224] border border-purple-500/30 shadow-[0_0_40px_rgba(168,85,247,0.15)] rounded-2xl w-full max-w-3xl max-h-[85vh] flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-200">
-            
-            {/* Modal Header */}
-            <div className="flex justify-between items-center p-5 border-b border-white/10 bg-white/[0.02]">
-              <div>
-                <h2 className="text-white font-bold text-lg tracking-wide flex items-center gap-3">
-                  <Database className="text-purple-400" size={20} />
-                  Extracted JSON Payload
-                </h2>
-                <p className="text-gray-500 text-xs mt-1 font-mono">{selectedFile?.name}</p>
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+          <div className="relative bg-[#0B1224] border border-white/10 w-full max-w-7xl h-[90vh] rounded-2xl overflow-hidden shadow-2xl flex flex-col">
+            <div className="flex items-center justify-between p-4 border-b border-white/5 bg-white/5">
+              <div className="flex items-center gap-3">
+                <Database className="text-purple-400" size={20} />
+                <div>
+                  <h2 className="text-white font-bold tracking-tight">Data Extraction Verification</h2>
+                  <p className="text-[10px] text-gray-400 uppercase tracking-widest">{selectedFile?.name}</p>
+                </div>
               </div>
-              <button 
-                onClick={() => setIsModalOpen(false)}
-                className="text-gray-400 hover:text-white hover:bg-white/10 p-2 rounded-lg transition-colors cursor-pointer"
-              >
+              <button onClick={() => setIsModalOpen(false)} className="p-2 hover:bg-white/10 rounded-full text-gray-400">
                 <X size={20} />
               </button>
             </div>
 
-            {/* Modal Body (JSON Display) */}
-            <div className="p-6 overflow-y-auto flex-1 bg-[#050914]">
-              <pre className="font-mono text-sm text-cyan-300/90 whitespace-pre-wrap leading-relaxed">
-                <code>
-                  {JSON.stringify(mockJsonData, null, 2)}
-                </code>
-              </pre>
+            <div className="flex-1 flex overflow-hidden min-h-0">
+              {/* LEFT PANEL: NATIVE PDF VIEW */}
+              <div className="w-1/2 border-r border-white/5 bg-[#1a1d23] flex flex-col">
+                <div className="p-3 bg-white/5 flex items-center gap-2 border-b border-white/5">
+                  <FileText size={14} className="text-gray-400" />
+                  <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Source Document</span>
+                </div>
+                <div className="flex-1 bg-[#1a1d23]">
+                  {/* #navpanes=0 hides the sidebar thumbnails you wanted to remove */}
+                  <embed
+                    src="/Sample_filled_Claim_Form.pdf#navpanes=0&toolbar=0&view=FitH"
+                    type="application/pdf"
+                    className="w-full h-full border-none"
+                  />
+                </div>
+              </div>
+
+              {/* RIGHT PANEL: JSON OUTPUT */}
+              <div className="w-1/2 flex flex-col bg-[#050914]">
+                <div className="p-3 bg-white/5 border-b border-white/5 flex items-center gap-2">
+                  <FileJson size={14} className="text-purple-400" />
+                  <span className="text-[10px] font-black text-purple-400 uppercase tracking-widest">Extracted Payload</span>
+                </div>
+                <div className="flex-1 overflow-auto p-6">
+                  <pre className="text-cyan-400 font-mono text-xs leading-relaxed">
+                    {JSON.stringify(mockJsonData, null, 2)}
+                  </pre>
+                </div>
+              </div>
             </div>
 
-            {/* Modal Footer */}
-            <div className="p-5 border-t border-white/10 bg-white/[0.02] flex justify-end gap-4">
-              <button 
-                onClick={() => setIsModalOpen(false)}
-                className="px-5 py-2.5 rounded-lg text-xs font-bold text-gray-400 hover:text-white hover:bg-white/5 transition-colors uppercase tracking-widest cursor-pointer"
-              >
-                Close
-              </button>
-              <button 
-                onClick={handleDownloadJson}
-                className="px-5 py-2.5 rounded-lg text-xs font-bold text-purple-100 bg-purple-600 hover:bg-purple-500 transition-all shadow-[0_0_15px_rgba(168,85,247,0.4)] flex items-center gap-2 uppercase tracking-widest cursor-pointer"
-              >
-                <Download size={16} />
-                Download JSON
+            <div className="p-4 bg-white/5 border-t border-white/5 flex justify-end gap-3">
+              <button onClick={() => setIsModalOpen(false)} className="px-6 py-2 rounded-xl text-xs font-bold text-gray-400 hover:text-white uppercase">Close</button>
+              <button onClick={handleDownloadJson} className="flex items-center gap-2 px-6 py-2 bg-purple-600 text-white rounded-xl text-xs font-bold uppercase tracking-widest">
+                <Download size={14} /> Download JSON
               </button>
             </div>
-            
           </div>
         </div>
       )}
