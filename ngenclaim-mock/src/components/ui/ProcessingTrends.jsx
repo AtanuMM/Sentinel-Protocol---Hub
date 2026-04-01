@@ -9,12 +9,11 @@ import {
   ResponsiveContainer, 
   Cell 
 } from 'recharts';
-import { processingTrendsData } from '../../data/mockData';
 
-export default function ProcessingTrends() {
+export default function ProcessingTrends({ chartData }) {
   return (
     <div className="bg-[#0B1224] p-6 rounded-2xl border border-white/5 h-full flex flex-col shadow-2xl">
-      {/* Header with Neon Legend */}
+      {/* Header */}
       <div className="flex justify-between items-start mb-8">
         <div>
           <h3 className="text-xl font-bold text-white tracking-tight uppercase">Processing Trends</h3>
@@ -34,8 +33,7 @@ export default function ProcessingTrends() {
 
       <div className="flex-1 w-full min-h-[250px]">
         <ResponsiveContainer width="100%" height="100%">
-          <BarChart data={processingTrendsData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-            {/* 1. THE SECRET SAUCE: SVG Gradients and Glow Filters */}
+          <BarChart data={chartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
             <defs>
               <linearGradient id="barGradientSuccess" x1="0" y1="0" x2="0" y2="1">
                 <stop offset="0%" stopColor="#34d399" stopOpacity={0.8} />
@@ -56,7 +54,6 @@ export default function ProcessingTrends() {
               </filter>
             </defs>
 
-            {/* Subtle HUD Grid Lines */}
             <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="rgba(255,255,255,0.05)" />
             
             <XAxis 
@@ -73,7 +70,6 @@ export default function ProcessingTrends() {
               tick={{ fill: '#4b5563', fontSize: 10 }} 
             />
 
-            {/* HUD Styled Tooltip */}
             <Tooltip 
               cursor={{ fill: 'rgba(255,255,255,0.03)' }}
               contentStyle={{ 
@@ -85,7 +81,6 @@ export default function ProcessingTrends() {
               }}
             />
 
-            {/* The Bars with Glow and Gradient */}
             <Bar 
               dataKey="volume" 
               radius={[4, 4, 0, 0]} 
@@ -93,10 +88,9 @@ export default function ProcessingTrends() {
               filter="url(#glow)"
               barSize={30}
             >
-              {processingTrendsData.map((entry, index) => (
+              {chartData && chartData.map((entry, index) => (
                 <Cell 
                   key={`cell-${index}`} 
-                  // Logic to alternate colors or set specific ones based on your wireframe
                   fill={index % 2 === 0 ? "url(#barGradientSuccess)" : "url(#barGradientPending)"} 
                 />
               ))}
