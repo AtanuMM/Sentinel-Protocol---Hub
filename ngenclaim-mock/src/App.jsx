@@ -9,11 +9,15 @@ import DashboardLayout from './components/layout/DashboardLayout';
 import Gateway from './pages/Gateway';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
+import UserManagement from './pages/UserManagement';
+import MDM from './pages/MDM';
 
 // Placeholders
 // const Dashboard = () => <div className="text-white text-2xl font-bold">Data Influx Dashboard</div>;
-const MDM = () => <div className="text-white text-2xl font-bold">MDM Engine Orchestration</div>;
-const UserMgmt = () => <div className="text-white text-2xl font-bold">User Access Control</div>;
+// const MDM = () => <div className="text-white text-2xl font-bold">MDM Engine Orchestration</div>;
+// const UserMgmt = () => <div className="text-white text-2xl font-bold">User Access Control</div>;
+const Settings = () => <div className="text-white text-2xl font-bold">Settings</div>;
+const Profile = () => <div className="text-white text-2xl font-bold">Profile</div>;
 
 function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(() => {
@@ -29,7 +33,9 @@ function App() {
         <Route element={isAuthenticated ? <DashboardLayout /> : <Navigate to="/login" />}>
           <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/mdm" element={<MDM />} />
-          <Route path="/users" element={<UserMgmt />} />
+          <Route path="/users" element={<UserManagement />} />
+          <Route path="/settings" element={<Settings />} />
+          <Route path="/profile" element={<Profile />} />
           {/* Redirect /dashboard by default if they hit the layout root */}
           <Route path="/app" element={<Navigate to="/dashboard" />} />
         </Route>
