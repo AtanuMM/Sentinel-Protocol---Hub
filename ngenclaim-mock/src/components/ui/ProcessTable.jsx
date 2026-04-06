@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-// We no longer need Document, Page, or pdfjs imports
-import { FileText, Database, MessageSquare, MoreVertical, Eye, X, Download, AtSign, FileJson } from 'lucide-react';
+// Added AlertTriangle, ShieldCheck, and AlertCircle for the risk indicators
+import { FileText, Database, MessageSquare, MoreVertical, Eye, X, Download, AtSign, FileJson, AlertTriangle, ShieldCheck, AlertCircle } from 'lucide-react';
 
 // Mock JSON data to display in the modal
 const mockJsonData = {
@@ -231,17 +231,49 @@ const ProcessTable = () => {
       {isModalOpen && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
           <div className="relative bg-[#0B1224] border border-white/10 w-full max-w-7xl h-[90vh] rounded-2xl overflow-hidden shadow-2xl flex flex-col">
+            
+            {/* --- MODAL HEADER --- */}
             <div className="flex items-center justify-between p-4 border-b border-white/5 bg-white/5">
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-3 w-1/3">
                 <Database className="text-purple-400" size={20} />
                 <div>
                   <h2 className="text-white font-bold tracking-tight">Data Extraction Verification</h2>
                   <p className="text-[10px] text-gray-400 uppercase tracking-widest">{selectedFile?.name}</p>
                 </div>
               </div>
-              <button onClick={() => setIsModalOpen(false)} className="p-2 hover:bg-white/10 rounded-full text-gray-400">
-                <X size={20} />
-              </button>
+
+              {/* --- RISK SCORE INDICATORS (Comment/Uncomment to switch states) --- */}
+              <div className="flex-1 flex justify-center">
+                
+                {/* 1. RED: High Risk (Currently Active) */}
+                <div className="flex items-center gap-2 px-5 py-2 bg-red-500/10 border border-red-500/40 rounded-full shadow-[0_0_20px_rgba(239,68,68,0.3)] animate-pulse">
+                  <AlertTriangle size={18} className="text-red-400" />
+                  <span className="text-[11px] font-black text-red-400 uppercase tracking-[0.15em]">High Fraud Risk: 92%</span>
+                </div>
+
+                {/* 2. YELLOW: Medium Risk */}
+                
+                {/* <div className="flex items-center gap-2 px-5 py-2 bg-yellow-500/10 border border-yellow-500/40 rounded-full shadow-[0_0_15px_rgba(234,179,8,0.2)]">
+                  <AlertCircle size={18} className="text-yellow-400" />
+                  <span className="text-[11px] font-black text-yellow-400 uppercase tracking-[0.15em]">Moderate Risk: 45%</span>
+                </div> */}
+               
+
+                {/* 3. GREEN: Low Risk */}
+                {/*
+                <div className="flex items-center gap-2 px-5 py-2 bg-emerald-500/10 border border-emerald-500/40 rounded-full shadow-[0_0_15px_rgba(16,185,129,0.2)]">
+                  <ShieldCheck size={18} className="text-emerald-400" />
+                  <span className="text-[11px] font-black text-emerald-400 uppercase tracking-[0.15em]">Clear • Low Risk: 4%</span>
+                </div>
+                */}
+
+              </div>
+
+              <div className="flex justify-end w-1/3">
+                <button onClick={() => setIsModalOpen(false)} className="p-2 hover:bg-white/10 rounded-full text-gray-400 transition-colors">
+                  <X size={20} />
+                </button>
+              </div>
             </div>
 
             <div className="flex-1 flex overflow-hidden min-h-0">
@@ -252,7 +284,6 @@ const ProcessTable = () => {
                   <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Source Document</span>
                 </div>
                 <div className="flex-1 bg-[#1a1d23]">
-                  {/* #navpanes=0 hides the sidebar thumbnails you wanted to remove */}
                   <embed
                     src="/Sample_filled_Claim_Form.pdf#navpanes=0&toolbar=0&view=FitH"
                     type="application/pdf"
