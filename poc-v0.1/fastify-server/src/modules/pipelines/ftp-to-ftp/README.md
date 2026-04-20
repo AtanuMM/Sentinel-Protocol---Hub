@@ -67,6 +67,9 @@ modules/pipelines/
     types/…
 ```
 
+The `email-to-ftp` scaffold now exists as placeholder-only boilerplate at
+`src/modules/pipelines/email-to-ftp/` (coming soon).
+
 Then register it in [`src/app.ts`](../../../app.ts) alongside the existing
 pipeline:
 
