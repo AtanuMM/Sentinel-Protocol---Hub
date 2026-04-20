@@ -1,11 +1,11 @@
 import { randomUUID } from "crypto";
 import { Readable } from "stream";
 import { pipeline } from "stream/promises";
-import { config } from "../../config";
-import { AppError } from "../../errors/appError";
-import { minioClient, producer, redisClient } from "../../infra/clients";
-import { IngestionChannelRepository } from "../../repositories/ingestionChannel.repository";
-import { MinioWebhookEvent } from "../../types/webhook";
+import { config } from "../../../../config";
+import { AppError } from "../../../../errors/appError";
+import { minioClient, producer, redisClient } from "../../../../infra/clients";
+import { IngestionChannelRepository } from "../../../../repositories/ingestionChannel.repository";
+import { MinioWebhookEvent } from "../types/webhook";
 
 const withRetries = async <T>(fn: () => Promise<T>, attempts = 3): Promise<T> => {
   let lastErr: unknown;

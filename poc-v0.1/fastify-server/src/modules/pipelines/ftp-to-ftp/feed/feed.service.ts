@@ -1,4 +1,4 @@
-import { IngestionChannelRepository } from "../../repositories/ingestionChannel.repository";
+import { IngestionChannelRepository } from "../../../../repositories/ingestionChannel.repository";
 
 export class FeedService {
   constructor(private readonly repository: IngestionChannelRepository) {}

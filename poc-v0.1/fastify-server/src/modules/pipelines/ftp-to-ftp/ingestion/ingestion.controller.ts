@@ -1,5 +1,5 @@
 import { FastifyReply, FastifyRequest } from "fastify";
-import { MinioWebhookEvent } from "../../types/webhook";
+import { MinioWebhookEvent } from "../types/webhook";
 import { IngestionService } from "./ingestion.service";
 
 type WebhookRequest = FastifyRequest<{ Body: MinioWebhookEvent }>;

@@ -2,6 +2,11 @@
 
 module.exports = {
   async up(queryInterface, Sequelize) {
+    const tables = await queryInterface.showAllTables();
+    if (tables.includes("Ingestion_Channel_Master")) {
+      return;
+    }
+
     await queryInterface.createTable("Ingestion_Channel_Master", {
       organisation_id: {
         type: Sequelize.STRING,

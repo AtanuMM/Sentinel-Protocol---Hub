@@ -1,5 +1,5 @@
 import { FastifyInstance } from "fastify";
-import { IngestionChannelRepository } from "../../repositories/ingestionChannel.repository";
+import { IngestionChannelRepository } from "../../../../repositories/ingestionChannel.repository";
 import { IntegrationService } from "./integration.service";
 import { IntegrationController } from "./integration.controller";
 import { linkBucketBodySchema } from "./integration.schemas";

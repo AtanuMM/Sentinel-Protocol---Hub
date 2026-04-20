@@ -19,9 +19,17 @@ export class IngestionChannelRepository {
     return IngestionChannelModel.findByPk(orgId);
   }
 
+  async updateEncryptedPassword(orgId: string, encryptedPassword: string): Promise<void> {
+    await IngestionChannelModel.update(
+      { external_password_encrypted: encryptedPassword },
+      { where: { organisation_id: orgId } }
+    );
+  }
+
   async findRecent(limit = 5) {
     return IngestionChannelModel.findAll({
       limit,
+      attributes: ["organisation_id", "source_prefix", "source_bucket", "external_username", "region", "is_onboarded", "createdAt", "updatedAt"],
       order: [["updatedAt", "DESC"]],
     });
   }

@@ -1,5 +1,5 @@
 import { FastifyInstance } from "fastify";
-import { IngestionChannelRepository } from "../../repositories/ingestionChannel.repository";
+import { IngestionChannelRepository } from "../../../../repositories/ingestionChannel.repository";
 import { FeedController } from "./feed.controller";
 import { FeedService } from "./feed.service";
 

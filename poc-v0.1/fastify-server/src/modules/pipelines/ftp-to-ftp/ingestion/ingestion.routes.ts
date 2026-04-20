@@ -1,6 +1,6 @@
 import { FastifyInstance } from "fastify";
-import { verifyWebhookSignature } from "../../middleware/webhookAuth";
-import { IngestionChannelRepository } from "../../repositories/ingestionChannel.repository";
+import { verifyWebhookSignature } from "../../../../middleware/webhookAuth";
+import { IngestionChannelRepository } from "../../../../repositories/ingestionChannel.repository";
 import { IngestionController } from "./ingestion.controller";
 import { webhookBodySchema } from "./ingestion.schemas";
 import { IngestionService } from "./ingestion.service";

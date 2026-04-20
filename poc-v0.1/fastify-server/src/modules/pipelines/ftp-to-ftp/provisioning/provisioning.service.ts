@@ -1,8 +1,8 @@
 import * as Minio from "minio";
-import { config } from "../../config";
-import { AppError } from "../../errors/appError";
-import { IngestionChannelRepository } from "../../repositories/ingestionChannel.repository";
-import { decryptText } from "../../utils/crypto";
+import { config } from "../../../../config";
+import { AppError } from "../../../../errors/appError";
+import { IngestionChannelRepository } from "../../../../repositories/ingestionChannel.repository";
+import { decryptText, encryptText } from "../../../../utils/crypto";
 
 export class ProvisioningService {
   constructor(private readonly repository: IngestionChannelRepository) {}
@@ -16,12 +16,20 @@ export class ProvisioningService {
     if (!channel) throw new AppError(404, "Organisation not found. Please link credentials first.", "NOT_FOUND");
     if (!channel.is_onboarded) throw new AppError(403, "Please initialize org hierarchy first.", "NOT_ONBOARDED");
 
+    let decryptedSecret = channel.external_password_encrypted;
+    const isLegacyPlaintext = (channel.external_password_encrypted.match(/:/g) ?? []).length !== 2;
+    if (!isLegacyPlaintext) {
+      decryptedSecret = decryptText(channel.external_password_encrypted);
+    } else {
+      await this.repository.updateEncryptedPassword(orgId, encryptText(channel.external_password_encrypted));
+    }
+
     const tpaClient = new Minio.Client({
       endPoint: config.minioEndpoint,
       port: config.minioPort,
       useSSL: config.minioUseSSL,
       accessKey: channel.external_username,
-      secretKey: decryptText(channel.external_password_encrypted),
+      secretKey: decryptedSecret,
     });
 
     try {

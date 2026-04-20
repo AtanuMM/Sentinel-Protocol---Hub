@@ -1,7 +1,7 @@
 import * as Minio from "minio";
-import { IngestionChannelRepository } from "../../repositories/ingestionChannel.repository";
-import { encryptText } from "../../utils/crypto";
-import { config } from "../../config";
+import { IngestionChannelRepository } from "../../../../repositories/ingestionChannel.repository";
+import { encryptText } from "../../../../utils/crypto";
+import { config } from "../../../../config";
 
 interface LinkBucketInput {
   orgId: string;
