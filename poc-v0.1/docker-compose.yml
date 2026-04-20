@@ -40,6 +40,20 @@ services:
     container_name: sentinel-cache
     ports:
       - "6380:6379"
+  
+  redis-insight:
+    image: redis/redisinsight:latest
+    container_name: sentinel-redis-insight
+    ports:
+      - "8001:5540"
+    environment:
+      # This JSON string automatically adds your Redis service to the UI on startup
+      - REDISINSIGHT_HOST=0.0.0.0
+      - REDISINSIGHT_PORT=5540
+      - REDIS_HOSTS=Sentinel-Cache:redis:6379
+    restart: always
+    depends_on:
+      - redis
 
   # 4. KAFKA CLUSTER (KRaft Mode - No ZooKeeper Required)
   # Internal: kafka:29092 | External: localhost:9092
@@ -96,3 +110,102 @@ services:
   #     MINIO_ACCESS_KEY: admin
   #     MINIO_SECRET_KEY: SuperSecret123
   #     NODE_ENV: development
+  
+
+
+#   services:
+#   # 1. S3 SIMULATOR
+#   minio:
+#     image: quay.io/minio/aistor/minio:latest
+#     container_name: sentinel-s3
+#     ports:
+#       - "9000:9000"
+#       - "9001:9001"
+#     environment:
+#       MINIO_ROOT_USER: minioadmin
+#       MINIO_ROOT_PASSWORD: minioadmin
+#     volumes:
+#       - ./minio_data:/data
+#       - ./minio.license:/minio.license:ro
+#     command: server /data --console-address ":9001" --license /minio.license
+#     networks:
+#       - sentinel-network
+
+#   # 2. THE TRACE DATABASE
+#   db:
+#     image: postgres:15
+#     container_name: sentinel-db
+#     environment:
+#       POSTGRES_USER: postgres
+#       POSTGRES_PASSWORD: postgres123
+#       POSTGRES_DB: sentinel_mdm
+#     ports:
+#       - "5432:5432"
+#     volumes:
+#       - ./postgres_data:/var/lib/postgresql/data
+#     networks:
+#       - sentinel-network
+
+#   # 3. FILE TAGGING CACHE
+#   redis:
+#     image: redis:alpine
+#     container_name: sentinel-cache
+#     ports:
+#       - "6380:6379"
+#     networks:
+#       - sentinel-network
+
+#   # 4. REDIS UI (Auto-Configured)
+#   redis-insight:
+#     image: redis/redisinsight:latest
+#     container_name: sentinel-redis-insight
+#     ports:
+#       - "8001:8001"
+#     environment:
+#       # This JSON string automatically adds your Redis service to the UI on startup
+#       - REDISINSIGHT_DATABASES=[{"host":"redis","port":6379,"name":"Sentinel-Cache"}]
+#     restart: always
+#     depends_on:
+#       - redis
+#     networks:
+#       - sentinel-network
+
+#   # 5. KAFKA CLUSTER
+#   kafka:
+#     image: confluentinc/cp-kafka:latest
+#     container_name: sentinel-kafka
+#     ports:
+#       - "9092:9092"
+#     environment:
+#       KAFKA_NODE_ID: 1
+#       KAFKA_PROCESS_ROLES: 'broker,controller'
+#       KAFKA_CONTROLLER_QUORUM_VOTERS: '1@kafka:29093'
+#       KAFKA_LISTENERS: 'PLAINTEXT://kafka:29092,CONTROLLER://kafka:29093,PLAINTEXT_HOST://0.0.0.0:9092'
+#       KAFKA_ADVERTISED_LISTENERS: 'PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092'
+#       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: 'CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT'
+#       KAFKA_CONTROLLER_LISTENER_NAMES: 'CONTROLLER'
+#       KAFKA_INTER_BROKER_LISTENER_NAME: 'PLAINTEXT'
+#       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+#       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+#       CLUSTER_ID: 'MkU3OEVBNTcwNTJENDM2Qk'
+#     networks:
+#       - sentinel-network
+
+#   # 6. KAFKA VISUALIZER
+#   kafka-ui:
+#     image: provectuslabs/kafka-ui:latest
+#     container_name: sentinel-kafka-ui
+#     ports:
+#       - "8080:8080"
+#     depends_on:
+#       - kafka
+#     environment:
+#       KAFKA_CLUSTERS_0_NAME: sentinel-kraft-cluster
+#       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+#     networks:
+#       - sentinel-network
+
+# # CRITICAL: This defines the shared network for all services
+# networks:
+#   sentinel-network:
+#     driver: bridge
