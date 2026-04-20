@@ -94,7 +94,7 @@ function App() {
   const isOnboarded = currentChannel?.is_onboarded || false;
 
   // Function Wrappers
-  const onboardOrg = () => triggerAction('init-today', 'Initializing Org Hierarchy...');
+  const onboardOrg = () => triggerAction('onboard-org', 'Initializing Org Hierarchy...');
   const initializeToday = () => triggerAction('init-today', 'Provisioning Date-Partition...');
 
   const triggerAction = async (endpoint, startMsg) => {
