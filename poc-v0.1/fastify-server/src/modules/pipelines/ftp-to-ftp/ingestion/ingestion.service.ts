@@ -5,6 +5,8 @@ import { config } from "../../../../config";
 import { AppError } from "../../../../errors/appError";
 import { minioClient, producer, redisClient } from "../../../../infra/clients";
 import { IngestionChannelRepository } from "../../../../repositories/ingestionChannel.repository";
+import { IngestionTraceEvent } from "../../../../types/ingestionEvent";
+import { buildDedupKey } from "../../../../utils/dedupKey";
 import { MinioWebhookEvent } from "../types/webhook";
 
 const withRetries = async <T>(fn: () => Promise<T>, attempts = 3): Promise<T> => {
@@ -42,7 +44,7 @@ export class IngestionService {
     const today = new Date().toISOString().split("T")[0];
     if (folderDate !== today) throw new AppError(400, "Stale Date Partition", "STALE_DATE");
 
-    const dedupKey = `file:dedup:${orgId}:${sourceBucket}:${sourcePath}:${etag}`;
+    const dedupKey = buildDedupKey("ftp", orgId, sourceBucket, sourcePath, etag);
     const dedupInserted = await redisClient.set(dedupKey, "processing", "EX", config.dedupTtlSec, "NX");
     if (dedupInserted !== "OK") {
       return { status: "ignored", reason: "duplicate" };
@@ -60,21 +62,24 @@ export class IngestionService {
         await minioClient.putObject(config.landingBucket, landingPath, Readable.from(source));
       });
 
+      const traceEvent: IngestionTraceEvent = {
+        schemaVersion: 1,
+        traceId,
+        orgId,
+        zoneId,
+        landingPath,
+        originalPath: sourcePath,
+        timestamp: new Date().toISOString(),
+        metadata: { source: "ftp" },
+      };
+
       await withRetries(async () => {
         await producer.send({
           topic: config.ingestionTopic,
           messages: [
             {
               key: orgId,
-              value: JSON.stringify({
-                schemaVersion: 1,
-                traceId,
-                orgId,
-                zoneId,
-                landingPath,
-                originalPath: sourcePath,
-                timestamp: new Date().toISOString(),
-              }),
+              value: JSON.stringify(traceEvent),
             },
           ],
         });
