@@ -4,6 +4,8 @@ import cors from '@fastify/cors';
 import fs from 'node:fs';
 import path from 'node:path';
 import { secretRoutes } from '@/routes/secretRoutes';
+import { authRoutes } from '@/routes/authRoutes';
+import { serviceRoutes } from '@/routes/serviceRoutes';
 // 1. Environment Detection
 const isProd = process.env.NODE_ENV === 'production' || process.env.NODE_ENV === 'staging';
 
@@ -40,6 +42,8 @@ const startServer = async () => {
     await fastify.register(cors, { 
       origin: isProd ? process.env.ALLOWED_ORIGIN : true 
     });
+    await fastify.register(authRoutes, { prefix: '/api/v1' });
+    await fastify.register(serviceRoutes, { prefix: '/api/v1' });
     await fastify.register(secretRoutes, { prefix: '/api/v1' });
 
     // Health Check

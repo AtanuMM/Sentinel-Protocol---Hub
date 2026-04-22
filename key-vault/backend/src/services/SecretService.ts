@@ -46,4 +46,45 @@ export class SecretService {
       dekTag: secret.dekTag,
     });
   }
+  /**
+   * Fetches all secrets for a service and decrypts them
+   */
+  static async getAllSecrets(serviceId: string) {
+    const secrets = await prisma.secret.findMany({
+      where: { serviceId },
+    });
+
+    if (secrets.length === 0) return [];
+
+    // Decrypt each secret in the list
+    return secrets.map((secret) => {
+      try {
+        const decryptedValue = cryptoProcessor.decrypt({
+          encryptedBlob: secret.encryptedBlob,
+          authTag: secret.authTag,
+          iv: secret.iv,
+          wrappedDek: secret.wrappedDek,
+          dekIv: secret.dekIv,
+          dekTag: secret.dekTag,
+        });
+
+        // Try to parse JSON if applicable, else return string
+        let parsedValue;
+        try {
+          parsedValue = JSON.parse(decryptedValue);
+        } catch {
+          parsedValue = decryptedValue;
+        }
+
+        return {
+          keyName: secret.keyName,
+          value: parsedValue,
+          updatedAt: secret.updatedAt
+        };
+      } catch (error) {
+        console.error(`Failed to decrypt secret: ${secret.keyName}`, error);
+        return { keyName: secret.keyName, value: "ERROR_DECRYPTION_FAILED" };
+      }
+    });
+  }
 }

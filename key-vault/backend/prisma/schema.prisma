@@ -9,70 +9,68 @@ datasource db {
 
 // 2. The Identity Models
 model User {
-  id        String    @id @default(uuid())
-  email     String    @unique
-  password  String    // Hashed password for UI login
-  role      Role      @default(DEVELOPER)
-  services  Service[]
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
-}
-
-enum Role {
-  SUPER_ADMIN
-  DEVELOPER
+  id         String    @id @default(uuid())
+  keycloakId String    @unique
+  email      String    @unique
+  apiKeyHash String?   @unique
+  services   Service[]
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
 }
 
 // 3. The Service & Auth Models
 model Service {
-  id          String     @id @default(uuid())
-  name        String     
+  id          String  @id @default(uuid())
+  name        String
   description String?
   ownerId     String
-  owner       User       @relation(fields: [ownerId], references: [id])
-  apiKeys     ApiKey[]
-  secrets     Secret[]
-  auditLogs   AuditLog[]
-  createdAt   DateTime   @default(now())
-  updatedAt   DateTime   @updatedAt
+  owner       User    @relation(fields: [ownerId], references: [id])
+
+  // Relation fields (Virtual - Not columns in DB)
+  secrets   Secret[]
+  apiKeys   ApiKey[]
+  auditLogs AuditLog[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 model ApiKey {
-  id         String   @id @default(uuid())
-  prefix     String   
-  hash       String   @unique 
+  id         String    @id @default(uuid())
+  prefix     String
+  hash       String    @unique
   serviceId  String
-  service    Service  @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  service    Service   @relation(fields: [serviceId], references: [id], onDelete: Cascade)
   lastUsedAt DateTime?
-  isRevoked  Boolean  @default(false)
-  createdAt  DateTime @default(now())
+  isRevoked  Boolean   @default(false)
+  createdAt  DateTime  @default(now())
 }
 
 // 4. The Encryption Models (The Heart of the Vault)
 model Secret {
-  id             String   @id @default(uuid())
-  keyName        String   
-  encryptedBlob  String
-  authTag        String
-  iv             String
-  wrappedDek     String
-  dekIv          String
-  dekTag         String
-  serviceId      String
-  service        Service  @relation(fields: [serviceId], references: [id], onDelete: Cascade)
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  id            String   @id @default(uuid())
+  keyName       String
+  encryptedBlob String
+  authTag       String
+  iv            String
+  wrappedDek    String
+  dekIv         String
+  dekTag        String
+  serviceId     String
+  service       Service  @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
-  @@unique([serviceId, keyName]) 
+  @@unique([serviceId, keyName])
 }
 
 model AuditLog {
   id        String   @id @default(uuid())
-  serviceId String?  
+  serviceId String?
   service   Service? @relation(fields: [serviceId], references: [id], onDelete: SetNull)
-  action    String   
-  target    String?  
-  status    String   
+  action    String
+  target    String?
+  status    String
   ipAddress String?
   createdAt DateTime @default(now())
 }
