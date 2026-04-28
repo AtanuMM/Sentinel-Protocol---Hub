@@ -90,6 +90,46 @@ services:
     environment:
       KAFKA_CLUSTERS_0_NAME: sentinel-kraft-cluster
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+  
+  # 7. GREENMAIL (Test IMAP/SMTP server)
+  # SMTP: localhost:3025 | IMAP: localhost:3143 | IMAPS: localhost:3993
+  greenmail:
+    image: greenmail/standalone:2.0.1
+    container_name: sentinel-greenmail
+    ports:
+      - "3025:3025"
+      - "3143:3143"
+      - "3993:3993"
+    environment:
+      GREENMAIL_OPTS: >-
+        -Dgreenmail.setup.test.smtp
+        -Dgreenmail.setup.test.imap
+        -Dgreenmail.setup.test.imaps
+        -Dgreenmail.hostname=0.0.0.0
+        -Dgreenmail.users=alice:secret123@hitpa.local,claims:claims-pass@hitpa.local
+
+  # 8. ROUNDCUBE (Browser UI for the GreenMail mailboxes)
+  # Access at: http://localhost:8888
+  # Login as: alice@hitpa.local / secret123  (or claims@hitpa.local / claims-pass)
+  roundcube:
+    image: roundcube/roundcubemail:latest
+    container_name: sentinel-roundcube
+    depends_on:
+      - greenmail
+    ports:
+      - "8888:80"
+    environment:
+      ROUNDCUBEMAIL_DEFAULT_HOST: greenmail
+      ROUNDCUBEMAIL_DEFAULT_PORT: 3143
+      ROUNDCUBEMAIL_SMTP_SERVER: greenmail
+      ROUNDCUBEMAIL_SMTP_PORT: 3025
+      ROUNDCUBEMAIL_DB_TYPE: sqlite
+      ROUNDCUBEMAIL_PLUGINS: archive,zipdownload
+    volumes:
+      - roundcube_data:/var/roundcube/db
+
+volumes:
+  roundcube_data:
 
   # 6. THE HARVESTER (Sentinel Node.js Pod) - ON HOLD
   # harvester:

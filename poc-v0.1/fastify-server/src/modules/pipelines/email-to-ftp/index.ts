@@ -1,6 +1,6 @@
 import { FastifyInstance } from "fastify";
+import { registerProvisioningRoutes } from "./provisioning/provisioning.routes";
 
-// Coming soon: Email-to-FTP pipeline module registration.
-export const registerEmailToFtpPipeline = async (_app: FastifyInstance): Promise<void> => {
-  // Coming soon: register email-to-ftp routes here once implemented.
+export const registerEmailToFtpPipeline = async (app: FastifyInstance): Promise<void> => {
+  await app.register(registerProvisioningRoutes, { prefix: "/api/email-to-ftp" });
 };

@@ -19,6 +19,15 @@ function App() {
     region: zone
   });
 
+  // Vault API Key Provisioning State
+  const [showVaultForm, setShowVaultForm] = useState(false);
+  const [vaultLoading, setVaultLoading] = useState(false);
+  const [vaultForm, setVaultForm] = useState({ keycloakId: '', email: '' });
+  const [vaultActive, setVaultActive] = useState(
+    typeof window !== 'undefined' && Boolean(sessionStorage.getItem('sentinel.apiKey'))
+  );
+  const [vaultReveal, setVaultReveal] = useState(null);
+
   // --- API: PING TEST ---
   const checkServerLink = async () => {
     setServerStatus('checking');
@@ -37,6 +46,36 @@ function App() {
 
   const handleInputChange = (e) => {
     setFormData({ ...formData, [e.target.name]: e.target.value });
+  };
+
+  const submitVaultProvision = async (e) => {
+    e.preventDefault();
+    setVaultLoading(true);
+    setStatus({ msg: 'Provisioning Vault API Key...', type: 'info' });
+
+    try {
+      const res = await fetch('http://localhost:8000/api/v1/auth/provision', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          keycloakId: vaultForm.keycloakId.trim(),
+          email: vaultForm.email.trim(),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || data.message || 'Provisioning failed');
+
+      sessionStorage.setItem('sentinel.apiKey', data.apiKey);
+      sessionStorage.setItem('sentinel.userId', data.userId);
+
+      setVaultActive(true);
+      setVaultReveal({ apiKey: data.apiKey, userId: data.userId });
+      setStatus({ msg: data.message || 'Vault API Key provisioned.', type: 'success' });
+    } catch (err) {
+      setStatus({ msg: `Vault Error: ${err.message}`, type: 'error' });
+    } finally {
+      setVaultLoading(false);
+    }
   };
 
   const submitIntegration = async (e) => {
@@ -184,6 +223,20 @@ function App() {
             {serverStatus === 'online' ? 'LINK_ACTIVE' : serverStatus === 'offline' ? 'LINK_DOWN' : 'CHECK_LINK'}
           </button>
 
+          {/* Generate Vault API Key Button */}
+          <button
+            onClick={() => setShowVaultForm(true)}
+            disabled={vaultLoading}
+            className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border text-[10px] font-bold transition-all ${
+              vaultActive
+                ? 'bg-emerald-500/10 border-emerald-500/50 text-emerald-400'
+                : 'bg-slate-800 border-slate-600 text-slate-400 hover:bg-slate-700'
+            } ${vaultLoading ? 'opacity-60 cursor-wait' : ''}`}
+          >
+            <div className={`h-1.5 w-1.5 rounded-full ${vaultActive ? 'bg-emerald-400' : 'bg-slate-500'} ${vaultLoading ? 'animate-ping' : ''}`} />
+            {vaultActive ? 'VAULT_KEY_ACTIVE' : 'GENERATE_VAULT_KEY'}
+          </button>
+
           <div className="text-right font-mono">
             <span className="px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-[10px] font-bold text-sentinel-accent tracking-tighter uppercase">
               ORG: {orgId} // {zone}
@@ -279,6 +332,85 @@ function App() {
                   <button type="submit" className="flex-1 py-3 bg-sentinel-accent text-slate-900 font-bold rounded-xl hover:bg-sky-400 transition-colors shadow-lg shadow-sky-500/20 uppercase tracking-widest text-xs italic">Commit Handshake</button>
                 </div>
               </form>
+            </div>
+          </div>
+        )}
+
+        {/* --- VAULT API KEY MODAL --- */}
+        {showVaultForm && (
+          <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <div className="bg-sentinel-card border border-slate-700 w-full max-w-lg rounded-2xl p-8 shadow-2xl animate-in zoom-in-95 duration-200">
+              <div className="mb-6">
+                <h3 className="text-2xl font-bold text-white">Vault API Key</h3>
+                <p className="text-slate-400 text-xs font-mono tracking-tighter opacity-70">PROVISION: /api/v1/auth/provision</p>
+              </div>
+
+              {!vaultReveal ? (
+                <form onSubmit={submitVaultProvision} className="space-y-4">
+                  <div>
+                    <label className="block text-[10px] uppercase tracking-widest text-slate-500 font-bold mb-1">Keycloak ID</label>
+                    <input
+                      name="keycloakId"
+                      value={vaultForm.keycloakId}
+                      onChange={(e) => setVaultForm({ ...vaultForm, keycloakId: e.target.value })}
+                      required
+                      className="w-full bg-slate-800 border border-slate-600 rounded-lg p-3 text-sm focus:outline-none focus:border-sentinel-accent"
+                      placeholder="atanu_dev_02"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] uppercase tracking-widest text-slate-500 font-bold mb-1">Email</label>
+                    <input
+                      type="email"
+                      name="email"
+                      value={vaultForm.email}
+                      onChange={(e) => setVaultForm({ ...vaultForm, email: e.target.value })}
+                      required
+                      className="w-full bg-slate-800 border border-slate-600 rounded-lg p-3 text-sm focus:outline-none focus:border-sentinel-accent"
+                      placeholder="atanu@example.com"
+                    />
+                  </div>
+
+                  <div className="flex gap-4 pt-4 border-t border-slate-700 mt-6">
+                    <button type="button" onClick={() => setShowVaultForm(false)} className="flex-1 py-3 text-xs font-bold text-slate-400 hover:text-white transition-colors uppercase tracking-widest">
+                      Abort
+                    </button>
+                    <button type="submit" disabled={vaultLoading} className="flex-1 py-3 bg-sentinel-accent text-slate-900 font-bold rounded-xl hover:bg-sky-400 transition-colors shadow-lg shadow-sky-500/20 uppercase tracking-widest text-xs italic disabled:opacity-50">
+                      {vaultLoading ? 'Provisioning...' : 'Generate Vault Key'}
+                    </button>
+                  </div>
+                </form>
+              ) : (
+                <div className="space-y-4">
+                  <div className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 p-4 text-emerald-300 text-xs font-mono">
+                    Store the API key now. It will not be shown again.
+                  </div>
+                  <div>
+                    <label className="block text-[10px] uppercase tracking-widest text-slate-500 font-bold mb-1">User ID</label>
+                    <code className="block w-full bg-slate-800 border border-slate-600 rounded-lg p-3 text-xs text-slate-200 break-all">{vaultReveal.userId}</code>
+                  </div>
+                  <div>
+                    <label className="block text-[10px] uppercase tracking-widest text-slate-500 font-bold mb-1">API Key</label>
+                    <code className="block w-full bg-slate-800 border border-slate-600 rounded-lg p-3 text-xs text-sentinel-accent break-all">{vaultReveal.apiKey}</code>
+                  </div>
+                  <div className="flex gap-4 pt-4 border-t border-slate-700 mt-6">
+                    <button
+                      type="button"
+                      onClick={() => navigator.clipboard?.writeText(vaultReveal.apiKey)}
+                      className="flex-1 py-3 text-xs font-bold text-slate-200 bg-slate-800 hover:bg-slate-700 rounded-xl transition-colors uppercase tracking-widest"
+                    >
+                      Copy API Key
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => { setShowVaultForm(false); setVaultReveal(null); }}
+                      className="flex-1 py-3 bg-sentinel-success text-slate-900 font-bold rounded-xl hover:bg-emerald-400 transition-colors uppercase tracking-widest text-xs italic"
+                    >
+                      Done
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         )}

@@ -28,4 +28,5 @@ export const config = {
   dedupTtlSec: Number(process.env.DEDUP_TTL_SEC ?? 86400),
   webhookSecret: process.env.WEBHOOK_SECRET ?? "",
   encryptionKey: required("APP_ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef"),
+  vaultUrl: required("VAULT_URL", "http://localhost:8000/api/v1"),
 };
