@@ -30,10 +30,9 @@ function App() {
 
   // Email (IMAP) UI-only State
   const [showEmailVaultSetupModal, setShowEmailVaultSetupModal] = useState(false);
-  const [emailVaultReady, setEmailVaultReady] = useState(
-    typeof window !== 'undefined' && Boolean(sessionStorage.getItem('sentinel.emailVaultReady'))
-  );
+  const [emailVaultReady, setEmailVaultReady] = useState(false);
   const [showEmailSourceModal, setShowEmailSourceModal] = useState(false);
+  const [showWhatsappModal, setShowWhatsappModal] = useState(false);
   const [emailSourceSaving, setEmailSourceSaving] = useState(false);
   const [emailSourceForm, setEmailSourceForm] = useState(() => {
     if (typeof window === 'undefined') {
@@ -265,7 +264,7 @@ function App() {
     <div className="min-h-screen p-8 lg:p-16 bg-sentinel-dark text-slate-200 font-sans">
       
       {/* Header Section */}
-      <header className="max-w-6xl mx-auto mb-12 flex justify-between items-end border-b border-slate-700 pb-6">
+      <header className="w-full mx-auto mb-12 flex justify-between items-end border-b border-slate-700 pb-6">
         <div>
           <h1 className="text-4xl font-extrabold tracking-tight text-white italic">
             SENTINEL<span className="text-sentinel-accent">.PROTOCOL</span>
@@ -314,7 +313,7 @@ function App() {
         </div>
       </header>
 
-      <main className="max-w-6xl mx-auto grid md:grid-cols-2 lg:grid-cols-3 gap-8 relative">
+      <main className="w-full mx-auto grid md:grid-cols-2 lg:grid-cols-3 gap-8 relative">
         
         {/* Card 1: Data Integration */}
         <div className="bg-sentinel-card border border-slate-700 p-8 rounded-2xl shadow-xl hover:border-sentinel-accent transition-all group relative overflow-hidden">
@@ -358,15 +357,10 @@ function App() {
 
           <div className="space-y-3">
             <button
-              disabled={emailVaultReady}
               onClick={() => setShowEmailVaultSetupModal(true)}
-              className={`w-full py-3 px-4 font-bold rounded-xl transition-colors uppercase text-[11px] tracking-widest ${
-                emailVaultReady
-                  ? 'bg-slate-800 text-slate-500 cursor-not-allowed'
-                  : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-600'
-              }`}
+              className="w-full py-3 px-4 font-bold rounded-xl transition-colors uppercase text-[11px] tracking-widest bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-600"
             >
-              {emailVaultReady ? 'Email Vault Service Ready' : 'Setup Email Vault Service'}
+              Setup Email Vault Service
             </button>
 
             <button
@@ -381,35 +375,22 @@ function App() {
           </div>
         </div>
 
-        {/* Card 2: Daily Operations */}
-        <div className={`bg-sentinel-card border p-8 rounded-2xl shadow-xl transition-all text-left ${
-          isOnboarded ? 'border-sentinel-success hover:border-emerald-400' : 'border-slate-700 opacity-70'
-        }`}>
-          <div className={`h-12 w-12 rounded-lg flex items-center justify-center mb-6 border ${
-            isOnboarded ? 'bg-emerald-500/10 border-emerald-500/20' : 'bg-slate-500/10 border-slate-500/20'
-          }`}>
-            <svg className={`w-6 h-6 ${isOnboarded ? 'text-sentinel-success' : 'text-slate-500'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+        {/* Card 3: Add WhatsApp */}
+        <div className="bg-sentinel-card border border-slate-700 p-8 rounded-2xl shadow-xl hover:border-sentinel-accent transition-all group relative overflow-hidden">
+          <div className="h-12 w-12 bg-emerald-500/10 rounded-lg flex items-center justify-center mb-6 border border-emerald-500/20">
+            <svg className="w-6 h-6 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 20l1.6-4.8A9 9 0 1112 21a9 9 0 01-4.6-1.3L3 20z" />
             </svg>
           </div>
-
-          <h2 className="text-xl font-bold text-white mb-2 font-sans">Daily Operations</h2>
-          
+          <h2 className="text-xl font-bold text-white mb-2">Add WhatsApp</h2>
           <p className="text-slate-400 text-sm mb-8 leading-relaxed">
-            {isOnboarded 
-              ? `Provision the partition for ${new Date().toISOString().split('T')[0]} to enable flow.`
-              : `Awaiting External Ingress Configuration. Please link the bucket first.`}
+            Configure a WhatsApp source for ingestion workflows.
           </p>
-
-          <button 
-            disabled={loading || !isOnboarded}
-            onClick={initializeToday}
-            className={`w-full py-3 px-4 font-bold rounded-xl transition-all uppercase text-[11px] tracking-widest ${
-              isOnboarded 
-                ? 'bg-sentinel-success hover:bg-emerald-400 text-slate-900' 
-                : 'bg-slate-800 text-slate-500 cursor-not-allowed'
-            }`}>
-            {isOnboarded ? "Provision Today's Folder" : "System Locked"}
+          <button
+            onClick={() => setShowWhatsappModal(true)}
+            className="w-full py-3 px-4 bg-sentinel-accent hover:bg-sky-400 text-slate-900 font-bold rounded-xl transition-colors"
+          >
+            Add WhatsApp Source
           </button>
         </div>
 
@@ -658,9 +639,43 @@ function App() {
             </div>
           </div>
         )}
+
+        {/* --- WHATSAPP MODAL --- */}
+        {showWhatsappModal && (
+          <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <div className="bg-sentinel-card border border-slate-700 w-full max-w-lg rounded-2xl p-8 shadow-2xl animate-in zoom-in-95 duration-200">
+              <div className="mb-4">
+                <h3 className="text-2xl font-bold text-white">Add WhatsApp Source</h3>
+              </div>
+              <p className="text-slate-300 text-sm">Feature coming soon.</p>
+              <div className="flex gap-4 pt-4 border-t border-slate-700 mt-6">
+                <button
+                  type="button"
+                  onClick={() => setShowWhatsappModal(false)}
+                  className="w-full py-3 bg-sentinel-accent text-slate-900 font-bold rounded-xl hover:bg-sky-400 transition-colors uppercase tracking-widest text-xs italic"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </main>
     {/* Live Activity Feed */}
-    <section className="max-w-6xl mx-auto mt-12 animate-in fade-in slide-in-from-bottom-4 duration-700">
+    <section className="w-full mx-auto mt-12 animate-in fade-in slide-in-from-bottom-4 duration-700">
+            <div className="mb-4 flex items-center justify-end">
+              <button
+                disabled={loading || !isOnboarded}
+                onClick={initializeToday}
+                className={`py-2.5 px-4 font-bold rounded-xl transition-all uppercase text-[11px] tracking-widest ${
+                  isOnboarded
+                    ? 'bg-sentinel-success hover:bg-emerald-400 text-slate-900'
+                    : 'bg-slate-800 text-slate-500 cursor-not-allowed'
+                }`}
+              >
+                {isOnboarded ? "Provision Today's Folder" : "System Locked"}
+              </button>
+            </div>
             <div className="flex items-center gap-2 mb-4">
               <div className="h-1.5 w-1.5 rounded-full bg-sentinel-accent animate-pulse" />
               <h3 className="text-[10px] font-bold uppercase tracking-[0.2em] text-slate-500">
@@ -711,7 +726,7 @@ function App() {
           </section>
 
       {/* Status Bar */}
-      <footer className="max-w-6xl mx-auto mt-12">
+      <footer className="w-full mx-auto mt-12">
         <div className={`p-4 rounded-xl border flex items-center gap-4 transition-all duration-500 ${
           status.type === 'success' ? 'bg-emerald-500/10 border-emerald-500/50 text-emerald-400' :
           status.type === 'error' ? 'bg-rose-500/10 border-rose-500/50 text-rose-400' :
