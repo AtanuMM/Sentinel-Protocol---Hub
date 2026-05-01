@@ -1,6 +1,7 @@
 import { FastifyInstance } from "fastify";
 import { ProvisioningController } from "./provisioning.controller";
 import {
+  previewInboxBodySchema,
   registerEmailSourceBodySchema,
   registerEmailSourceHeadersSchema,
   testEmailSourceBodySchema,
@@ -19,6 +20,17 @@ export const registerProvisioningRoutes = async (app: FastifyInstance): Promise<
       },
     },
     controller.testEmailSource,
+  );
+
+  app.post(
+    "/email-source/preview",
+    {
+      schema: {
+        body: previewInboxBodySchema,
+        headers: registerEmailSourceHeadersSchema,
+      },
+    },
+    controller.previewInbox,
   );
 
   app.post(

@@ -29,4 +29,17 @@ export const config = {
   webhookSecret: process.env.WEBHOOK_SECRET ?? "",
   encryptionKey: required("APP_ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef"),
   vaultUrl: required("VAULT_URL", "http://localhost:8000/api/v1"),
+  /** Default zone for email landing paths when not stored per source (POC). */
+  defaultEmailZone: process.env.DEFAULT_EMAIL_ZONE ?? "eu-central-1",
+  /**
+   * Comma-separated claim keywords for IMAP poller (case-insensitive substring match).
+   */
+  emailClaimKeywords: (process.env.EMAIL_CLAIM_KEYWORDS ?? "Claims,Claim,Health,Claim-Form")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean),
+  /** Max UTF-8 chars of email body text stored on artifact rows. */
+  emailClaimBodyStoreMaxChars: Number(process.env.EMAIL_CLAIM_BODY_STORE_MAX ?? 262144),
+  /** Max messages scanned per poll request (after UID filter). */
+  emailPollMaxMessages: Math.min(Math.max(Number(process.env.EMAIL_POLL_MAX_MESSAGES ?? 50), 1), 200),
 };

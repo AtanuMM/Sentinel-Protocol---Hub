@@ -324,6 +324,7 @@ function App() {
         body: JSON.stringify({
           orgId,
           serviceId: serviceId.trim(),
+          zoneId: zone,
           email: emailSourceForm.email.trim(),
           password: emailSourceForm.password,
           imapHost: emailSourceForm.imapHost.trim(),

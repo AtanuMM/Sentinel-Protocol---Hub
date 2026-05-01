@@ -5,6 +5,7 @@ export const registerEmailSourceBodySchema = {
   properties: {
     orgId: { type: "string", minLength: 1 },
     serviceId: { type: "string", minLength: 1 },
+    zoneId: { type: "string", minLength: 1 },
     email: { type: "string", minLength: 1 },
     password: { type: "string", minLength: 1 },
     imapHost: { type: "string", minLength: 1 },
@@ -23,6 +24,7 @@ export const registerEmailSourceHeadersSchema = {
 export interface RegisterEmailSourceInput {
   orgId: string;
   serviceId: string;
+  zoneId?: string;
   email: string;
   password: string;
   imapHost: string;
@@ -42,4 +44,23 @@ export const testEmailSourceBodySchema = {
 export interface TestEmailSourceInput {
   email: string;
   serviceId: string;
+}
+
+export const previewInboxBodySchema = {
+  type: "object",
+  required: ["email", "serviceId"],
+  additionalProperties: false,
+  properties: {
+    email: { type: "string", minLength: 1 },
+    serviceId: { type: "string", minLength: 1 },
+    limit: { type: "integer", minimum: 1, maximum: 25 },
+    maxAttachmentBytes: { type: "integer", minimum: 1024, maximum: 2097152 },
+  },
+} as const;
+
+export interface PreviewInboxInput {
+  email: string;
+  serviceId: string;
+  limit?: number;
+  maxAttachmentBytes?: number;
 }

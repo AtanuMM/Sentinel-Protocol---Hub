@@ -4,6 +4,8 @@ export class EmailSource extends Model {
   declare organisation_id: string;
   declare email_address: string;
   declare vault_service_id: string;
+  declare zone_id: string;
+  declare last_processed_uid: number;
   declare is_active: boolean;
   declare readonly updatedAt: Date;
   declare readonly createdAt: Date;
@@ -23,6 +25,16 @@ export const initEmailSourceModel = (sequelize: Sequelize): typeof EmailSource =
       vault_service_id: {
         type: DataTypes.STRING,
         allowNull: false,
+      },
+      zone_id: {
+        type: DataTypes.STRING,
+        allowNull: false,
+        defaultValue: "eu-central-1",
+      },
+      last_processed_uid: {
+        type: DataTypes.INTEGER,
+        allowNull: false,
+        defaultValue: 0,
       },
       is_active: {
         type: DataTypes.BOOLEAN,

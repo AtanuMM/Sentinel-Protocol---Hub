@@ -1,11 +1,7 @@
-import { ImapFlow } from "imapflow";
+import { createImapFlowClient } from "./imap-flow-factory";
+import type { ImapAuthConfig } from "./imap-flow-factory";
 
-export interface ImapTestConfig {
-  host: string;
-  port: number;
-  user: string;
-  pass: string;
-}
+export type ImapTestConfig = ImapAuthConfig;
 
 export type ImapTestResult = { success: true } | { success: false; error: string };
 
@@ -29,23 +25,7 @@ function isImapAuthFailure(err: unknown): boolean {
  * decide how to log/format the failure.
  */
 export async function testImapConnection(config: ImapTestConfig): Promise<ImapTestResult> {
-  const allowInsecureTls =
-    process.env.ALLOW_INSECURE_IMAP_TLS === "true" || process.env.NODE_ENV !== "production";
-
-  const client = new ImapFlow({
-    host: config.host,
-    port: config.port,
-    secure: true,
-    tls: {
-      // Greenmail IMAPS uses a self-signed cert in local setups.
-      rejectUnauthorized: !allowInsecureTls,
-    },
-    auth: {
-      user: config.user,
-      pass: config.pass,
-    },
-    logger: false,
-  });
+  const client = createImapFlowClient(config);
 
   try {
     await client.connect();
