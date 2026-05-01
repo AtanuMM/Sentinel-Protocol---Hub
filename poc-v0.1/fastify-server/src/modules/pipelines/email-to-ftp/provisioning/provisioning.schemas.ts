@@ -64,3 +64,73 @@ export interface PreviewInboxInput {
   limit?: number;
   maxAttachmentBytes?: number;
 }
+
+export const registerEmailSourceResponseSchema = {
+  type: "object",
+  required: ["success", "message", "data"],
+  properties: {
+    success: { type: "boolean", const: true },
+    message: { type: "string" },
+    data: {
+      type: "object",
+      required: ["email", "orgId"],
+      properties: {
+        email: { type: "string" },
+        orgId: { type: "string" },
+      },
+    },
+  },
+};
+
+export const testEmailSourceResponseSchema = {
+  type: "object",
+  required: ["success", "email", "active", "message"],
+  properties: {
+    success: { type: "boolean", const: true },
+    email: { type: "string" },
+    active: { type: "boolean" },
+    message: { type: "string" },
+    detail: { type: "string" },
+  },
+};
+
+export const previewInboxResponseSchema = {
+  type: "object",
+  required: ["success", "email", "message", "messages"],
+  properties: {
+    success: { type: "boolean", const: true },
+    email: { type: "string" },
+    message: { type: "string" },
+    messages: {
+      type: "array",
+      items: {
+        type: "object",
+        required: ["uid", "body", "attachments"],
+        properties: {
+          uid: { type: "integer" },
+          subject: { type: "string", nullable: true },
+          from: { type: "string", nullable: true },
+          date: { type: "string", nullable: true },
+          body: {
+            type: "object",
+            properties: {
+              text: { type: "string" },
+              html: { type: "string" },
+            },
+          },
+          attachments: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                filename: { type: "string" },
+                mime: { type: "string" },
+                base64: { type: "string" },
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+};

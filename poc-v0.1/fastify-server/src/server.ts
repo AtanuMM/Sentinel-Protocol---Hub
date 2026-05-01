@@ -2,8 +2,9 @@ import { buildApp } from "./app";
 import { config } from "./config";
 import { producer, redisClient, minioClient } from "./infra/clients";
 import { sequelize } from "./infra/db";
+import type { FastifyInstance } from "fastify";
 
-const app = buildApp();
+let app: FastifyInstance | undefined;
 
 const assertDependencies = async () => {
   await sequelize.authenticate();
@@ -13,16 +14,21 @@ const assertDependencies = async () => {
 };
 
 const closeResources = async () => {
-  await Promise.allSettled([producer.disconnect(), redisClient.quit(), sequelize.close(), app.close()]);
+  await Promise.allSettled([producer.disconnect(), redisClient.quit(), sequelize.close(), app?.close()]);
 };
 
 const start = async () => {
   try {
+    app = await buildApp();
     await assertDependencies();
     await app.listen({ port: config.port, host: config.host });
     app.log.info({ port: config.port }, "Sentinel Protocol server started");
   } catch (error) {
-    app.log.error(error);
+    if (app) {
+      app.log.error(error);
+    } else {
+      console.error(error);
+    }
     process.exit(1);
   }
 };
