@@ -10,3 +10,28 @@ export const pollClaimsBodySchema = {
     resetCursor: { type: "boolean" },
   },
 } as const;
+
+export const pollClaimsIngestedItemSchema = {
+  type: "object",
+  required: ["traceId", "landingPath", "pdfSha256", "attachmentFilename"],
+  properties: {
+    traceId: { type: "string", format: "uuid" },
+    landingPath: { type: "string" },
+    pdfSha256: { type: "string" },
+    attachmentFilename: { type: "string" },
+  },
+};
+
+export const pollClaimsResponseSchema = {
+  type: "object",
+  required: ["success", "email", "scannedUids", "claimKeywordMatches", "pdfsIngested", "ingested", "message"],
+  properties: {
+    success: { type: "boolean", const: true },
+    email: { type: "string" },
+    scannedUids: { type: "integer" },
+    claimKeywordMatches: { type: "integer" },
+    pdfsIngested: { type: "integer" },
+    ingested: { type: "array", items: pollClaimsIngestedItemSchema },
+    message: { type: "string" },
+  },
+};

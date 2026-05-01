@@ -30,3 +30,26 @@ export const webhookBodySchema = {
     },
   },
 };
+
+/** Outcomes from MinIO webhook processing (success, duplicate, ignored, etc.). */
+export const webhookProcessResponseSchema = {
+  oneOf: [
+    {
+      type: "object",
+      required: ["status"],
+      properties: {
+        status: { type: "string", enum: ["ignored"] },
+        reason: { type: "string" },
+      },
+    },
+    {
+      type: "object",
+      required: ["status", "traceId", "path"],
+      properties: {
+        status: { type: "string", enum: ["success"] },
+        traceId: { type: "string", format: "uuid" },
+        path: { type: "string" },
+      },
+    },
+  ],
+};

@@ -10,3 +10,13 @@ export const linkBucketBodySchema = {
     region: { type: "string" },
   },
 };
+
+export const linkBucketResponseSchema = {
+  type: "object",
+  required: ["status", "message", "is_onboarded"],
+  properties: {
+    status: { type: "string", enum: ["success"] },
+    message: { type: "string" },
+    is_onboarded: { type: "boolean" },
+  },
+};

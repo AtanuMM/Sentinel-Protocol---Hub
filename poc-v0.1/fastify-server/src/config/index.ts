@@ -12,6 +12,13 @@ const required = (name: string, fallback?: string): string => {
 
 export const config = {
   nodeEnv: process.env.NODE_ENV ?? "development",
+  /**
+   * Swagger UI at `/documentation`. Defaults on in non-production; in production set `ENABLE_SWAGGER_UI=true` explicitly.
+   * When false, raw OpenAPI JSON is still served at `/openapi.json`.
+   */
+  enableSwaggerUi:
+    process.env.ENABLE_SWAGGER_UI === "true" ||
+    (process.env.NODE_ENV !== "production" && process.env.ENABLE_SWAGGER_UI !== "false"),
   port: Number(process.env.PORT ?? 3000),
   host: process.env.HOST ?? "0.0.0.0",
   dbUrl: required("DB_URL", "postgres://postgres:postgres123@localhost:5432/sentinel_mdm"),
