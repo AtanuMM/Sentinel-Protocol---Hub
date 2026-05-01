@@ -12,6 +12,9 @@ import { createImapFlowClient } from "../integration/imap-flow-factory";
 import { splitPollParts } from "../integration/imap-claim-parts";
 import { resolveRegisteredImapCredentials } from "../integration/vault-imap-resolve";
 
+/** Safety cap for MIME-encoded or unusually long envelope subjects stored on artifacts. */
+const EMAIL_SUBJECT_STORE_MAX_CHARS = 4096;
+
 const withRetries = async <T>(fn: () => Promise<T>, attempts = 3): Promise<T> => {
   let lastErr: unknown;
   for (let i = 0; i < attempts; i += 1) {
@@ -158,7 +161,9 @@ export class EmailIngestionService {
             continue;
           }
 
-          const storedBodyText = combinedForMatch.slice(0, bodyStoreMax);
+          const storedSubjectText = subject.slice(0, EMAIL_SUBJECT_STORE_MAX_CHARS);
+          const bodyOnlyCombined = [textBody, stripHtmlForScan(htmlRaw)].filter(Boolean).join("\n");
+          const storedBodyText = bodyOnlyCombined.slice(0, bodyStoreMax);
           const rfcMessageId = msg.envelope?.messageId ?? null;
 
           const downloaded = await client.downloadMany(
@@ -210,6 +215,7 @@ export class EmailIngestionService {
                 imap_mailbox: mailboxPath,
                 imap_uidvalidity: uidValidity,
                 rfc_message_id: rfcMessageId,
+                email_subject_text: storedSubjectText,
                 email_body_text: storedBodyText,
                 matched_keywords: matchedKw,
                 trace_id: traceId,
