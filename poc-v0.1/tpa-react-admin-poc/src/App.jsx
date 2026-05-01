@@ -55,7 +55,7 @@ function App() {
     }
   };
 
-  // Email (IMAP) UI-only State
+  // Email (IMAP) add-source flow
   const [showEmailVaultSetupModal, setShowEmailVaultSetupModal] = useState(false);
   const [emailVaultConfirmLoading, setEmailVaultConfirmLoading] = useState(false);
   const [showEmailSourceModal, setShowEmailSourceModal] = useState(false);
@@ -298,25 +298,64 @@ function App() {
     setShowEmailSourceModal(true);
   };
 
-  const submitEmailSourceUiOnly = async (e) => {
+  const submitEmailSource = async (e) => {
     e.preventDefault();
     setEmailSourceSaving(true);
-    setStatus({ msg: 'Saving Email Source (UI only)...', type: 'info' });
+    setStatus({ msg: 'Saving Email Source...', type: 'info' });
     try {
+      const apiKey = localStorage.getItem('sentinel.apiKey');
+      if (!apiKey?.trim()) {
+        throw new Error('Vault API key required (GENERATE_VAULT_KEY or Add Existing API Key).');
+      }
+      const serviceId = localStorage.getItem('email-service-id');
+      if (!serviceId?.trim()) {
+        throw new Error('Email Vault service id missing. Complete Setup Email Vault Service first.');
+      }
       if (!emailSourceForm.email?.trim() || !emailSourceForm.password?.trim() || !emailSourceForm.imapHost?.trim()) {
         throw new Error('Missing required fields: email/login, password, and IMAP host.');
       }
-
+      const imapPort = Number(emailSourceForm.imapPort) || 993;
+      const res = await fetch('http://localhost:3000/api/email-to-ftp/email-source', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-vault-token': apiKey.trim(),
+        },
+        body: JSON.stringify({
+          orgId,
+          serviceId: serviceId.trim(),
+          email: emailSourceForm.email.trim(),
+          password: emailSourceForm.password,
+          imapHost: emailSourceForm.imapHost.trim(),
+          imapPort,
+        }),
+      });
+      let data = {};
+      try {
+        data = await res.json();
+      } catch {
+        data = {};
+      }
+      if (!res.ok) {
+        const detail = data.detail || data.message || data.error || `HTTP ${res.status}`;
+        throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail));
+      }
       const persisted = {
         orgId,
         email: emailSourceForm.email.trim(),
         imapHost: emailSourceForm.imapHost.trim(),
-        imapPort: Number(emailSourceForm.imapPort) || 993,
+        imapPort,
       };
       localStorage.setItem('sentinel.lastEmailSource', JSON.stringify(persisted));
-
+      setEmailSourceForm((prev) => ({
+        ...prev,
+        password: '',
+      }));
       setShowEmailSourceModal(false);
-      setStatus({ msg: 'Email source saved (UI only). API integration coming next.', type: 'success' });
+      setStatus({
+        msg: `Email source registered (${data.data?.email ?? persisted.email}).`,
+        type: 'success',
+      });
     } catch (err) {
       setStatus({ msg: `Email Setup Error: ${err.message}`, type: 'error' });
     } finally {
@@ -713,7 +752,7 @@ function App() {
                 </p>
               </div>
 
-              <form onSubmit={submitEmailSourceUiOnly} className="space-y-4">
+              <form onSubmit={submitEmailSource} className="space-y-4">
                 <div className="rounded-lg border border-slate-700 bg-slate-900/40 p-4">
                   <div className="text-[10px] uppercase tracking-widest text-slate-500 font-bold mb-2">Context</div>
                   <div className="text-xs font-mono text-slate-300">

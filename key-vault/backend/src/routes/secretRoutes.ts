@@ -27,9 +27,29 @@ export async function secretRoutes(fastify: FastifyInstance) {
     }
 
     const stringValue = typeof value === 'object' ? JSON.stringify(value) : String(value);
-    await SecretService.storeSecret(serviceId, keyName, stringValue);
-    
-    return reply.status(201).send({ message: `Secret '${keyName}' stored successfully.` });
+    const saved = await SecretService.storeSecret(serviceId, keyName, stringValue);
+
+    return reply.status(201).send({
+      message: `Secret '${keyName}' stored successfully.`,
+      secretId: saved.id,
+    });
+  });
+
+  fastify.delete('/secrets/by-id/:secretId', async (request: any, reply) => {
+    const { secretId } = request.params;
+    const user = request.user;
+
+    const secret = await prisma.secret.findUnique({
+      where: { id: secretId },
+      include: { service: true },
+    });
+
+    if (!secret || secret.service.ownerId !== user.id) {
+      return reply.status(403).send({ error: 'Forbidden: Secret not found or access denied.' });
+    }
+
+    await prisma.secret.delete({ where: { id: secretId } });
+    return reply.status(204).send();
   });
 
   // GET: Retrieve a secret
