@@ -19,6 +19,67 @@ function App() {
     region: zone
   });
 
+  // Vault API Key Provisioning State
+  const [showVaultForm, setShowVaultForm] = useState(false);
+  const [vaultLoading, setVaultLoading] = useState(false);
+  const [vaultForm, setVaultForm] = useState({ keycloakId: '', email: '' });
+  const [vaultActive, setVaultActive] = useState(
+    typeof window !== 'undefined' && Boolean(localStorage.getItem('sentinel.apiKey'))
+  );
+  const [vaultReveal, setVaultReveal] = useState(null);
+  const [vaultKeyMode, setVaultKeyMode] = useState('provision');
+  const [existingApiKey, setExistingApiKey] = useState('');
+  const [manualKeySaving, setManualKeySaving] = useState(false);
+
+  const closeVaultModal = () => {
+    setShowVaultForm(false);
+    setVaultKeyMode('provision');
+    setExistingApiKey('');
+  };
+
+  const submitExistingVaultApiKey = (e) => {
+    e.preventDefault();
+    const trimmed = existingApiKey.trim();
+    if (!trimmed) {
+      setStatus({ msg: 'API key is required.', type: 'error' });
+      return;
+    }
+    setManualKeySaving(true);
+    try {
+      localStorage.setItem('sentinel.apiKey', trimmed);
+      setVaultActive(true);
+      setStatus({ msg: 'Existing Vault API key saved.', type: 'success' });
+      closeVaultModal();
+    } finally {
+      setManualKeySaving(false);
+    }
+  };
+
+  // Email (IMAP) add-source flow
+  const [showEmailVaultSetupModal, setShowEmailVaultSetupModal] = useState(false);
+  const [emailVaultConfirmLoading, setEmailVaultConfirmLoading] = useState(false);
+  const [showEmailSourceModal, setShowEmailSourceModal] = useState(false);
+  const [showWhatsappModal, setShowWhatsappModal] = useState(false);
+  const [emailSourceSaving, setEmailSourceSaving] = useState(false);
+  const [emailSourceForm, setEmailSourceForm] = useState(() => {
+    if (typeof window === 'undefined') {
+      return { email: '', password: '', imapHost: '', imapPort: 993 };
+    }
+    try {
+      const raw = localStorage.getItem('sentinel.lastEmailSource');
+      if (!raw) return { email: '', password: '', imapHost: '', imapPort: 993 };
+      const parsed = JSON.parse(raw);
+      return {
+        email: parsed?.email ?? '',
+        password: '',
+        imapHost: parsed?.imapHost ?? '',
+        imapPort: Number(parsed?.imapPort ?? 993) || 993,
+      };
+    } catch {
+      return { email: '', password: '', imapHost: '', imapPort: 993 };
+    }
+  });
+
   // --- API: PING TEST ---
   const checkServerLink = async () => {
     setServerStatus('checking');
@@ -37,6 +98,36 @@ function App() {
 
   const handleInputChange = (e) => {
     setFormData({ ...formData, [e.target.name]: e.target.value });
+  };
+
+  const submitVaultProvision = async (e) => {
+    e.preventDefault();
+    setVaultLoading(true);
+    setStatus({ msg: 'Provisioning Vault API Key...', type: 'info' });
+
+    try {
+      const res = await fetch('http://localhost:8000/api/v1/auth/provision', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          keycloakId: vaultForm.keycloakId.trim(),
+          email: vaultForm.email.trim(),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || data.message || 'Provisioning failed');
+
+      localStorage.setItem('sentinel.apiKey', data.apiKey);
+      localStorage.setItem('sentinel.userId', data.userId);
+
+      setVaultActive(true);
+      setVaultReveal({ apiKey: data.apiKey, userId: data.userId });
+      setStatus({ msg: data.message || 'Vault API Key provisioned.', type: 'success' });
+    } catch (err) {
+      setStatus({ msg: `Vault Error: ${err.message}`, type: 'error' });
+    } finally {
+      setVaultLoading(false);
+    }
   };
 
   const submitIntegration = async (e) => {
@@ -153,11 +244,131 @@ function App() {
     };
   }, []); // orgId/zone omitted because they are constants in your current state
 
+  const hasEmailServiceId =
+    typeof window !== 'undefined' && Boolean(localStorage.getItem('email-service-id'));
+
+  const confirmEmailVaultSetup = async () => {
+    setEmailVaultConfirmLoading(true);
+    setStatus({ msg: 'Creating email service in Vault...', type: 'info' });
+    try {
+      const apiKey = localStorage.getItem('sentinel.apiKey');
+      if (!apiKey) {
+        throw new Error(
+          'Vault API key missing. Generate or add an existing key from the header first.',
+        );
+      }
+
+      const res = await fetch('http://localhost:8000/api/v1/services', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-vault-token': apiKey,
+        },
+        body: JSON.stringify({ name: 'email-to-FTP' }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || data.message || 'Failed to create email service');
+      }
+      if (!data.id) {
+        throw new Error('Invalid response: missing service id');
+      }
+
+      localStorage.setItem('email-service-id', data.id);
+      localStorage.setItem('sentinel.emailVaultReady', 'true');
+      setShowEmailVaultSetupModal(false);
+      setStatus({
+        msg: `Email Vault service created (${data.name}).`,
+        type: 'success',
+      });
+    } catch (err) {
+      setStatus({ msg: `Email Vault Setup Error: ${err.message}`, type: 'error' });
+    } finally {
+      setEmailVaultConfirmLoading(false);
+    }
+  };
+
+  const openEmailSourceFlow = () => {
+    if (!localStorage.getItem('email-service-id')) {
+      setShowEmailVaultSetupModal(true);
+      setStatus({ msg: 'Create the email-to-FTP service first (Setup Email Vault Service).', type: 'info' });
+      return;
+    }
+    setShowEmailSourceModal(true);
+  };
+
+  const submitEmailSource = async (e) => {
+    e.preventDefault();
+    setEmailSourceSaving(true);
+    setStatus({ msg: 'Saving Email Source...', type: 'info' });
+    try {
+      const apiKey = localStorage.getItem('sentinel.apiKey');
+      if (!apiKey?.trim()) {
+        throw new Error('Vault API key required (GENERATE_VAULT_KEY or Add Existing API Key).');
+      }
+      const serviceId = localStorage.getItem('email-service-id');
+      if (!serviceId?.trim()) {
+        throw new Error('Email Vault service id missing. Complete Setup Email Vault Service first.');
+      }
+      if (!emailSourceForm.email?.trim() || !emailSourceForm.password?.trim() || !emailSourceForm.imapHost?.trim()) {
+        throw new Error('Missing required fields: email/login, password, and IMAP host.');
+      }
+      const imapPort = Number(emailSourceForm.imapPort) || 993;
+      const res = await fetch('http://localhost:3000/api/email-to-ftp/email-source', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-vault-token': apiKey.trim(),
+        },
+        body: JSON.stringify({
+          orgId,
+          serviceId: serviceId.trim(),
+          zoneId: zone,
+          email: emailSourceForm.email.trim(),
+          password: emailSourceForm.password,
+          imapHost: emailSourceForm.imapHost.trim(),
+          imapPort,
+        }),
+      });
+      let data = {};
+      try {
+        data = await res.json();
+      } catch {
+        data = {};
+      }
+      if (!res.ok) {
+        const detail = data.detail || data.message || data.error || `HTTP ${res.status}`;
+        throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail));
+      }
+      const persisted = {
+        orgId,
+        email: emailSourceForm.email.trim(),
+        imapHost: emailSourceForm.imapHost.trim(),
+        imapPort,
+      };
+      localStorage.setItem('sentinel.lastEmailSource', JSON.stringify(persisted));
+      setEmailSourceForm((prev) => ({
+        ...prev,
+        password: '',
+      }));
+      setShowEmailSourceModal(false);
+      setStatus({
+        msg: `Email source registered (${data.data?.email ?? persisted.email}).`,
+        type: 'success',
+      });
+    } catch (err) {
+      setStatus({ msg: `Email Setup Error: ${err.message}`, type: 'error' });
+    } finally {
+      setEmailSourceSaving(false);
+    }
+  };
+
   return (
     <div className="min-h-screen p-8 lg:p-16 bg-sentinel-dark text-slate-200 font-sans">
       
       {/* Header Section */}
-      <header className="max-w-5xl mx-auto mb-12 flex justify-between items-end border-b border-slate-700 pb-6">
+      <header className="w-full mx-auto mb-12 flex justify-between items-end border-b border-slate-700 pb-6">
         <div>
           <h1 className="text-4xl font-extrabold tracking-tight text-white italic">
             SENTINEL<span className="text-sentinel-accent">.PROTOCOL</span>
@@ -184,6 +395,24 @@ function App() {
             {serverStatus === 'online' ? 'LINK_ACTIVE' : serverStatus === 'offline' ? 'LINK_DOWN' : 'CHECK_LINK'}
           </button>
 
+          {/* Generate Vault API Key Button */}
+          <button
+            onClick={() => {
+              setVaultKeyMode('provision');
+              setExistingApiKey('');
+              setShowVaultForm(true);
+            }}
+            disabled={vaultLoading}
+            className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border text-[10px] font-bold transition-all ${
+              vaultActive
+                ? 'bg-emerald-500/10 border-emerald-500/50 text-emerald-400'
+                : 'bg-slate-800 border-slate-600 text-slate-400 hover:bg-slate-700'
+            } ${vaultLoading ? 'opacity-60 cursor-wait' : ''}`}
+          >
+            <div className={`h-1.5 w-1.5 rounded-full ${vaultActive ? 'bg-emerald-400' : 'bg-slate-500'} ${vaultLoading ? 'animate-ping' : ''}`} />
+            {vaultActive ? 'VAULT_KEY_ACTIVE' : 'GENERATE_VAULT_KEY'}
+          </button>
+
           <div className="text-right font-mono">
             <span className="px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-[10px] font-bold text-sentinel-accent tracking-tighter uppercase">
               ORG: {orgId} // {zone}
@@ -192,14 +421,14 @@ function App() {
         </div>
       </header>
 
-      <main className="max-w-5xl mx-auto grid md:grid-cols-2 gap-8 relative">
+      <main className="w-full mx-auto grid md:grid-cols-2 lg:grid-cols-3 gap-8 relative">
         
         {/* Card 1: Data Integration */}
         <div className="bg-sentinel-card border border-slate-700 p-8 rounded-2xl shadow-xl hover:border-sentinel-accent transition-all group relative overflow-hidden">
           <div className="h-12 w-12 bg-blue-500/10 rounded-lg flex items-center justify-center mb-6 border border-blue-500/20">
             <svg className="w-6 h-6 text-sentinel-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" /></svg>
           </div>
-          <h2 className="text-xl font-bold text-white mb-2">Data Integration</h2>
+          <h2 className="text-xl font-bold text-white mb-2">Connect FTP server</h2>
           <p className="text-slate-400 text-sm mb-8 leading-relaxed">
             Configure the external store credentials to activate the automated harvester.
           </p>
@@ -211,35 +440,74 @@ function App() {
           </button>
         </div>
 
-        {/* Card 2: Daily Operations */}
-        <div className={`bg-sentinel-card border p-8 rounded-2xl shadow-xl transition-all text-left ${
-          isOnboarded ? 'border-sentinel-success hover:border-emerald-400' : 'border-slate-700 opacity-70'
-        }`}>
-          <div className={`h-12 w-12 rounded-lg flex items-center justify-center mb-6 border ${
-            isOnboarded ? 'bg-emerald-500/10 border-emerald-500/20' : 'bg-slate-500/10 border-slate-500/20'
-          }`}>
-            <svg className={`w-6 h-6 ${isOnboarded ? 'text-sentinel-success' : 'text-slate-500'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+        {/* Card 2: Add Email (IMAP) */}
+        <div className="bg-sentinel-card border border-slate-700 p-8 rounded-2xl shadow-xl hover:border-sentinel-accent transition-all group relative overflow-hidden">
+          <div className="h-12 w-12 bg-fuchsia-500/10 rounded-lg flex items-center justify-center mb-6 border border-fuchsia-500/20">
+            <svg className="w-6 h-6 text-fuchsia-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M20 13V7a2 2 0 00-2-2H6a2 2 0 00-2 2v6m16 0l-8 5-8-5m16 0a2 2 0 01-2 2H6a2 2 0 01-2-2" />
             </svg>
           </div>
 
-          <h2 className="text-xl font-bold text-white mb-2 font-sans">Daily Operations</h2>
-          
-          <p className="text-slate-400 text-sm mb-8 leading-relaxed">
-            {isOnboarded 
-              ? `Provision the partition for ${new Date().toISOString().split('T')[0]} to enable flow.`
-              : `Awaiting External Ingress Configuration. Please link the bucket first.`}
+          <div className="flex items-start justify-between gap-4 mb-2">
+            <h2 className="text-xl font-bold text-white">Add Email (IMAP)</h2>
+            <span className={`px-2 py-0.5 rounded-md border text-[10px] font-bold uppercase tracking-widest ${
+              hasEmailServiceId
+                ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+                : 'bg-slate-800 border-slate-700 text-slate-500'
+            }`}>
+              {hasEmailServiceId ? 'VAULT_READY' : 'VAULT_REQUIRED'}
+            </span>
+          </div>
+
+          <p className="text-slate-400 text-sm mb-6 leading-relaxed">
+            Onboard a monitored inbox. Credentials are secured in Vault and used to test IMAP connectivity (API wiring next).
           </p>
 
-          <button 
-            disabled={loading || !isOnboarded}
-            onClick={initializeToday}
-            className={`w-full py-3 px-4 font-bold rounded-xl transition-all uppercase text-[11px] tracking-widest ${
-              isOnboarded 
-                ? 'bg-sentinel-success hover:bg-emerald-400 text-slate-900' 
-                : 'bg-slate-800 text-slate-500 cursor-not-allowed'
-            }`}>
-            {isOnboarded ? "Provision Today's Folder" : "System Locked"}
+          <div className="space-y-3">
+            <button
+              type="button"
+              disabled={hasEmailServiceId}
+              onClick={() => setShowEmailVaultSetupModal(true)}
+              className={`w-full py-3 px-4 font-bold rounded-xl transition-colors uppercase text-[11px] tracking-widest border ${
+                hasEmailServiceId
+                  ? 'bg-slate-800 text-slate-500 cursor-not-allowed border-slate-700'
+                  : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-600'
+              }`}
+            >
+              Setup Email Vault Service
+            </button>
+
+            <button
+              type="button"
+              disabled={!hasEmailServiceId || emailSourceSaving}
+              onClick={openEmailSourceFlow}
+              className={`w-full py-3 px-4 font-bold rounded-xl transition-colors disabled:opacity-50 ${
+                hasEmailServiceId && !emailSourceSaving
+                  ? 'bg-sentinel-accent hover:bg-sky-400 text-slate-900'
+                  : 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700'
+              } ${emailSourceSaving ? 'cursor-wait' : ''}`}
+            >
+              {emailSourceSaving ? 'Opening...' : 'Add Email Source'}
+            </button>
+          </div>
+        </div>
+
+        {/* Card 3: Add WhatsApp */}
+        <div className="bg-sentinel-card border border-slate-700 p-8 rounded-2xl shadow-xl hover:border-sentinel-accent transition-all group relative overflow-hidden">
+          <div className="h-12 w-12 bg-emerald-500/10 rounded-lg flex items-center justify-center mb-6 border border-emerald-500/20">
+            <svg className="w-6 h-6 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 20l1.6-4.8A9 9 0 1112 21a9 9 0 01-4.6-1.3L3 20z" />
+            </svg>
+          </div>
+          <h2 className="text-xl font-bold text-white mb-2">Add WhatsApp</h2>
+          <p className="text-slate-400 text-sm mb-8 leading-relaxed">
+            Configure a WhatsApp source for ingestion workflows.
+          </p>
+          <button
+            onClick={() => setShowWhatsappModal(true)}
+            className="w-full py-3 px-4 bg-sentinel-accent hover:bg-sky-400 text-slate-900 font-bold rounded-xl transition-colors"
+          >
+            Add WhatsApp Source
           </button>
         </div>
 
@@ -282,9 +550,320 @@ function App() {
             </div>
           </div>
         )}
+
+        {/* --- VAULT API KEY MODAL --- */}
+        {showVaultForm && (
+          <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <div className="bg-sentinel-card border border-slate-700 w-full max-w-lg rounded-2xl p-8 shadow-2xl animate-in zoom-in-95 duration-200">
+              <div className="mb-6">
+                <h3 className="text-2xl font-bold text-white">
+                  {vaultReveal
+                    ? 'Vault API Key'
+                    : vaultKeyMode === 'manual'
+                      ? 'Use Existing API Key'
+                      : 'Vault API Key'}
+                </h3>
+                <p className="text-slate-400 text-xs font-mono tracking-tighter opacity-70">
+                  {vaultReveal
+                    ? 'Store credentials securely.'
+                    : vaultKeyMode === 'manual'
+                      ? 'Only the key is saved; userId stays as-is unless you provision separately.'
+                      : 'PROVISION: /api/v1/auth/provision'}
+                </p>
+              </div>
+
+              {!vaultReveal && vaultKeyMode === 'manual' ? (
+                <form onSubmit={submitExistingVaultApiKey} className="space-y-4">
+                  <div>
+                    <label className="block text-[10px] uppercase tracking-widest text-slate-500 font-bold mb-1">API Key</label>
+                    <input
+                      type="password"
+                      name="existingApiKey"
+                      value={existingApiKey}
+                      onChange={(e) => setExistingApiKey(e.target.value)}
+                      required
+                      autoComplete="off"
+                      className="w-full bg-slate-800 border border-slate-600 rounded-lg p-3 text-sm focus:outline-none focus:border-sentinel-accent font-mono"
+                      placeholder="sv_live_..."
+                    />
+                  </div>
+                  <div className="flex flex-col gap-3 pt-4 border-t border-slate-700 mt-6">
+                    <div className="flex gap-4">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setVaultKeyMode('provision');
+                          setExistingApiKey('');
+                        }}
+                        className="flex-1 py-3 text-xs font-bold text-slate-400 hover:text-white transition-colors uppercase tracking-widest"
+                      >
+                        Back
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={manualKeySaving}
+                        className="flex-1 py-3 bg-sentinel-accent text-slate-900 font-bold rounded-xl hover:bg-sky-400 transition-colors shadow-lg shadow-sky-500/20 uppercase tracking-widest text-xs italic disabled:opacity-50 disabled:cursor-wait"
+                      >
+                        {manualKeySaving ? 'Saving...' : 'Save'}
+                      </button>
+                    </div>
+                  </div>
+                </form>
+              ) : !vaultReveal ? (
+                <form onSubmit={submitVaultProvision} className="space-y-4">
+                  <div>
+                    <label className="block text-[10px] uppercase tracking-widest text-slate-500 font-bold mb-1">Keycloak ID</label>
+                    <input
+                      name="keycloakId"
+                      value={vaultForm.keycloakId}
+                      onChange={(e) => setVaultForm({ ...vaultForm, keycloakId: e.target.value })}
+                      required
+                      className="w-full bg-slate-800 border border-slate-600 rounded-lg p-3 text-sm focus:outline-none focus:border-sentinel-accent"
+                      placeholder="atanu_dev_02"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] uppercase tracking-widest text-slate-500 font-bold mb-1">Email</label>
+                    <input
+                      type="email"
+                      name="email"
+                      value={vaultForm.email}
+                      onChange={(e) => setVaultForm({ ...vaultForm, email: e.target.value })}
+                      required
+                      className="w-full bg-slate-800 border border-slate-600 rounded-lg p-3 text-sm focus:outline-none focus:border-sentinel-accent"
+                      placeholder="atanu@example.com"
+                    />
+                  </div>
+
+                  <div className="flex flex-col gap-3 pt-4 border-t border-slate-700 mt-6">
+                    <div className="flex gap-4">
+                      <button type="button" onClick={closeVaultModal} className="flex-1 py-3 text-xs font-bold text-slate-400 hover:text-white transition-colors uppercase tracking-widest">
+                        Abort
+                      </button>
+                      <button type="submit" disabled={vaultLoading} className="flex-1 py-3 bg-sentinel-accent text-slate-900 font-bold rounded-xl hover:bg-sky-400 transition-colors shadow-lg shadow-sky-500/20 uppercase tracking-widest text-xs italic disabled:opacity-50">
+                        {vaultLoading ? 'Provisioning...' : 'Generate Vault Key'}
+                      </button>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setVaultKeyMode('manual')}
+                      className="w-full py-2.5 text-xs font-bold text-sentinel-accent border border-sentinel-accent/40 rounded-xl hover:bg-sky-400/10 transition-colors uppercase tracking-widest"
+                    >
+                      Add Existing API Key
+                    </button>
+                  </div>
+                </form>
+              ) : (
+                <div className="space-y-4">
+                  <div className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 p-4 text-emerald-300 text-xs font-mono">
+                    Store the API key now. It will not be shown again.
+                  </div>
+                  <div>
+                    <label className="block text-[10px] uppercase tracking-widest text-slate-500 font-bold mb-1">User ID</label>
+                    <code className="block w-full bg-slate-800 border border-slate-600 rounded-lg p-3 text-xs text-slate-200 break-all">{vaultReveal.userId}</code>
+                  </div>
+                  <div>
+                    <label className="block text-[10px] uppercase tracking-widest text-slate-500 font-bold mb-1">API Key</label>
+                    <code className="block w-full bg-slate-800 border border-slate-600 rounded-lg p-3 text-xs text-sentinel-accent break-all">{vaultReveal.apiKey}</code>
+                  </div>
+                  <div className="flex gap-4 pt-4 border-t border-slate-700 mt-6">
+                    <button
+                      type="button"
+                      onClick={() => navigator.clipboard?.writeText(vaultReveal.apiKey)}
+                      className="flex-1 py-3 text-xs font-bold text-slate-200 bg-slate-800 hover:bg-slate-700 rounded-xl transition-colors uppercase tracking-widest"
+                    >
+                      Copy API Key
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setVaultReveal(null);
+                        closeVaultModal();
+                      }}
+                      className="flex-1 py-3 bg-sentinel-success text-slate-900 font-bold rounded-xl hover:bg-emerald-400 transition-colors uppercase tracking-widest text-xs italic"
+                    >
+                      Done
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* --- EMAIL VAULT SETUP MODAL --- */}
+        {showEmailVaultSetupModal && (
+          <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <div className="bg-sentinel-card border border-slate-700 w-full max-w-lg rounded-2xl p-8 shadow-2xl animate-in zoom-in-95 duration-200">
+              <div className="mb-6">
+                <h3 className="text-2xl font-bold text-white">Email Vault Service</h3>
+                <p className="text-slate-400 text-xs font-mono tracking-tighter opacity-70">
+                  ONE-TIME SETUP (POC USER)
+                </p>
+              </div>
+
+              <div className="space-y-4 text-sm text-slate-300">
+                <div className="rounded-lg border border-slate-700 bg-slate-900/40 p-4">
+                  <div className="text-[10px] uppercase tracking-widest text-slate-500 font-bold mb-2">What this does</div>
+                  <ul className="list-disc pl-5 space-y-1 text-slate-400">
+                    <li>Creates the <span className="font-mono text-slate-300">email-to-FTP</span> service in Vault (POST /api/v1/services).</li>
+                    <li>
+                      Saves the service id to{' '}
+                      <span className="font-mono text-slate-300">localStorage/email-service-id</span>
+                      {' '}
+                      (enables <strong className="text-slate-300">Add Email Source</strong>). Also sets{' '}
+                      <span className="font-mono text-slate-300">sentinel.emailVaultReady</span>
+                      {' '}
+                      in localStorage.
+                    </li>
+                  </ul>
+                </div>
+              </div>
+
+              <div className="flex gap-4 pt-4 border-t border-slate-700 mt-6">
+                <button
+                  type="button"
+                  disabled={emailVaultConfirmLoading}
+                  onClick={() => setShowEmailVaultSetupModal(false)}
+                  className="flex-1 py-3 text-xs font-bold text-slate-400 hover:text-white transition-colors uppercase tracking-widest disabled:opacity-50"
+                >
+                  Abort
+                </button>
+                <button
+                  type="button"
+                  onClick={confirmEmailVaultSetup}
+                  disabled={emailVaultConfirmLoading}
+                  className="flex-1 py-3 bg-sentinel-accent text-slate-900 font-bold rounded-xl hover:bg-sky-400 transition-colors shadow-lg shadow-sky-500/20 uppercase tracking-widest text-xs italic disabled:opacity-50 disabled:cursor-wait"
+                >
+                  {emailVaultConfirmLoading ? 'Creating…' : 'Confirm Setup'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* --- ADD EMAIL SOURCE MODAL (UI ONLY) --- */}
+        {showEmailSourceModal && (
+          <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <div className="bg-sentinel-card border border-slate-700 w-full max-w-lg rounded-2xl p-8 shadow-2xl animate-in zoom-in-95 duration-200">
+              <div className="mb-6">
+                <h3 className="text-2xl font-bold text-white">Add Email Source</h3>
+                <p className="text-slate-400 text-xs font-mono tracking-tighter opacity-70">
+                  IMAP CONNECT (UI ONLY)
+                </p>
+              </div>
+
+              <form onSubmit={submitEmailSource} className="space-y-4">
+                <div className="rounded-lg border border-slate-700 bg-slate-900/40 p-4">
+                  <div className="text-[10px] uppercase tracking-widest text-slate-500 font-bold mb-2">Context</div>
+                  <div className="text-xs font-mono text-slate-300">
+                    ORG: <span className="text-sentinel-accent font-bold">{orgId}</span>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-[10px] uppercase tracking-widest text-slate-500 font-bold mb-1">Email / Login</label>
+                  <input
+                    value={emailSourceForm.email}
+                    onChange={(e) => setEmailSourceForm({ ...emailSourceForm, email: e.target.value })}
+                    className="w-full bg-slate-800 border border-slate-600 rounded-lg p-3 text-sm focus:outline-none focus:border-sentinel-accent"
+                    placeholder="claims@tpa.co.in (or login)"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] uppercase tracking-widest text-slate-500 font-bold mb-1">Password</label>
+                  <input
+                    type="password"
+                    value={emailSourceForm.password}
+                    onChange={(e) => setEmailSourceForm({ ...emailSourceForm, password: e.target.value })}
+                    className="w-full bg-slate-800 border border-slate-600 rounded-lg p-3 text-sm focus:outline-none focus:border-sentinel-accent"
+                    placeholder="••••••••"
+                    required
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-[10px] uppercase tracking-widest text-slate-500 font-bold mb-1">IMAP Host</label>
+                    <input
+                      value={emailSourceForm.imapHost}
+                      onChange={(e) => setEmailSourceForm({ ...emailSourceForm, imapHost: e.target.value })}
+                      className="w-full bg-slate-800 border border-slate-600 rounded-lg p-3 text-sm focus:outline-none focus:border-sentinel-accent"
+                      placeholder="mail.tpa.co.in"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] uppercase tracking-widest text-slate-500 font-bold mb-1">IMAP Port</label>
+                    <input
+                      inputMode="numeric"
+                      value={emailSourceForm.imapPort}
+                      onChange={(e) => setEmailSourceForm({ ...emailSourceForm, imapPort: e.target.value })}
+                      className="w-full bg-slate-800 border border-slate-600 rounded-lg p-3 text-sm focus:outline-none focus:border-sentinel-accent"
+                      placeholder="993"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex gap-4 pt-4 border-t border-slate-700 mt-6">
+                  <button
+                    type="button"
+                    onClick={() => setShowEmailSourceModal(false)}
+                    className="flex-1 py-3 text-xs font-bold text-slate-400 hover:text-white transition-colors uppercase tracking-widest"
+                  >
+                    Abort
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={emailSourceSaving}
+                    className="flex-1 py-3 bg-sentinel-accent text-slate-900 font-bold rounded-xl hover:bg-sky-400 transition-colors shadow-lg shadow-sky-500/20 uppercase tracking-widest text-xs italic disabled:opacity-50"
+                  >
+                    {emailSourceSaving ? 'Saving...' : 'Save Email Source'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* --- WHATSAPP MODAL --- */}
+        {showWhatsappModal && (
+          <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <div className="bg-sentinel-card border border-slate-700 w-full max-w-lg rounded-2xl p-8 shadow-2xl animate-in zoom-in-95 duration-200">
+              <div className="mb-4">
+                <h3 className="text-2xl font-bold text-white">Add WhatsApp Source</h3>
+              </div>
+              <p className="text-slate-300 text-sm">Feature coming soon.</p>
+              <div className="flex gap-4 pt-4 border-t border-slate-700 mt-6">
+                <button
+                  type="button"
+                  onClick={() => setShowWhatsappModal(false)}
+                  className="w-full py-3 bg-sentinel-accent text-slate-900 font-bold rounded-xl hover:bg-sky-400 transition-colors uppercase tracking-widest text-xs italic"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </main>
     {/* Live Activity Feed */}
-    <section className="max-w-5xl mx-auto mt-12 animate-in fade-in slide-in-from-bottom-4 duration-700">
+    <section className="w-full mx-auto mt-12 animate-in fade-in slide-in-from-bottom-4 duration-700">
+            <div className="mb-4 flex items-center justify-end">
+              <button
+                disabled={loading || !isOnboarded}
+                onClick={initializeToday}
+                className={`py-2.5 px-4 font-bold rounded-xl transition-all uppercase text-[11px] tracking-widest ${
+                  isOnboarded
+                    ? 'bg-sentinel-success hover:bg-emerald-400 text-slate-900'
+                    : 'bg-slate-800 text-slate-500 cursor-not-allowed'
+                }`}
+              >
+                {isOnboarded ? "Provision Today's Folder" : "System Locked"}
+              </button>
+            </div>
             <div className="flex items-center gap-2 mb-4">
               <div className="h-1.5 w-1.5 rounded-full bg-sentinel-accent animate-pulse" />
               <h3 className="text-[10px] font-bold uppercase tracking-[0.2em] text-slate-500">
@@ -335,7 +914,7 @@ function App() {
           </section>
 
       {/* Status Bar */}
-      <footer className="max-w-5xl mx-auto mt-12">
+      <footer className="w-full mx-auto mt-12">
         <div className={`p-4 rounded-xl border flex items-center gap-4 transition-all duration-500 ${
           status.type === 'success' ? 'bg-emerald-500/10 border-emerald-500/50 text-emerald-400' :
           status.type === 'error' ? 'bg-rose-500/10 border-rose-500/50 text-rose-400' :

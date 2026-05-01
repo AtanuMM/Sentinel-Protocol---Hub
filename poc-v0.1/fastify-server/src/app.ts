@@ -4,6 +4,7 @@ import sensible from "@fastify/sensible";
 import Fastify from "fastify";
 import { registerErrorHandler } from "./plugins/error-handler";
 import { registerHealthRoutes } from "./modules/health/health.routes";
+import { registerEmailToFtpPipeline } from "./modules/pipelines/email-to-ftp";
 import { registerFtpToFtpPipeline } from "./modules/pipelines/ftp-to-ftp";
 
 export const buildApp = () => {
@@ -20,5 +21,6 @@ export const buildApp = () => {
   app.register(cors, { origin: "*" });
   app.register(registerHealthRoutes);
   app.register(registerFtpToFtpPipeline);
+  app.register(registerEmailToFtpPipeline);
   return app;
 };
