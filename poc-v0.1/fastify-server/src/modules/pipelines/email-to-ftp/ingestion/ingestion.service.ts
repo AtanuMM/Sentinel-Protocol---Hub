@@ -8,6 +8,10 @@ import { EmailClaimArtifactRepository } from "../../../../repositories/emailClai
 import { IngestionTraceEvent } from "../../../../types/ingestionEvent";
 import { buildDedupKey } from "../../../../utils/dedupKey";
 import { findMatchedClaimKeywords, stripHtmlForScan } from "../integration/claim-text";
+import {
+  sanitizeAttachmentFilename,
+  sanitizeSubjectForKey,
+} from "../integration/email-subject-key";
 import { createImapFlowClient } from "../integration/imap-flow-factory";
 import { getImapPollMailboxPath } from "../integration/imap-mailbox-cursor";
 import { splitPollParts } from "../integration/imap-claim-parts";
@@ -172,6 +176,7 @@ export class EmailIngestionService {
           const bodyOnlyCombined = [textBody, stripHtmlForScan(htmlRaw)].filter(Boolean).join("\n");
           const storedBodyText = bodyOnlyCombined.slice(0, bodyStoreMax);
           const rfcMessageId = msg.envelope?.messageId ?? null;
+          const sanitizedSubject = sanitizeSubjectForKey(subject);
 
           const downloaded = await client.downloadMany(
             String(uid),
@@ -200,7 +205,9 @@ export class EmailIngestionService {
             }
 
             const traceId = randomUUID();
-            const landingPath = `${orgId}/${zoneId}/${today}/raw/${traceId}.pdf`;
+            const traceShort = traceId.slice(0, 8);
+            const safeAttachmentName = sanitizeAttachmentFilename(pdf.filename);
+            const landingPath = `${orgId}/${zoneId}/${today}/email/${sanitizedSubject}__${traceShort}/${traceId}__${safeAttachmentName}`;
             const artifactId = randomUUID();
             const originalPath = `email://${emailKey}/imap/${mailboxPath}/uid/${uid}/${pdf.filename}`;
 
