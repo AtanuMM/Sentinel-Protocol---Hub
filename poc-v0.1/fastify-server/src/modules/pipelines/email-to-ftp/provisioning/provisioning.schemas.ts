@@ -145,3 +145,62 @@ export const previewInboxResponseSchema = {
     },
   },
 };
+
+export const listEmailSourcesQuerystringSchema = {
+  type: "object",
+  required: ["orgId"],
+  additionalProperties: false,
+  properties: {
+    orgId: { type: "string", minLength: 1 },
+    /**
+     * When "true", runs a live IMAP login per source (O(n) network calls; may be slow for many rows).
+     * Omit or "false" for DB metadata only (`imap` is null on each item).
+     */
+    includeConnectionStatus: { type: "string", enum: ["true", "false"], default: "false" },
+  },
+} as const;
+
+export const emailSourceImapStatusSchema = {
+  type: "object",
+  required: ["active"],
+  properties: {
+    active: { type: "boolean" },
+    detail: { type: "string" },
+  },
+} as const;
+
+export const emailSourceListItemSchema = {
+  type: "object",
+  required: ["email", "serviceId", "zoneId", "isActive", "lastProcessedUid", "createdAt", "updatedAt", "imap"],
+  properties: {
+    email: { type: "string" },
+    serviceId: { type: "string" },
+    zoneId: { type: "string" },
+    isActive: { type: "boolean" },
+    lastProcessedUid: { type: "integer" },
+    createdAt: { type: "string" },
+    updatedAt: { type: "string" },
+    imap: {
+      anyOf: [{ type: "null" }, emailSourceImapStatusSchema],
+    },
+  },
+} as const;
+
+export const listEmailSourcesResponseSchema = {
+  type: "object",
+  required: ["success", "message", "orgId", "sources"],
+  properties: {
+    success: { type: "boolean", const: true },
+    message: { type: "string" },
+    orgId: { type: "string" },
+    sources: {
+      type: "array",
+      items: emailSourceListItemSchema,
+    },
+  },
+} as const;
+
+export interface ListEmailSourcesQuery {
+  orgId: string;
+  includeConnectionStatus?: "true" | "false";
+}

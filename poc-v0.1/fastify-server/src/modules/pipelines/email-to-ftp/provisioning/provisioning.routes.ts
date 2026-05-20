@@ -1,7 +1,10 @@
 import { FastifyInstance } from "fastify";
 import { openApiTags } from "../../../../openapi/tags";
+import { EmailSourceRepository } from "../../../../repositories/emailSource.repository";
 import { ProvisioningController } from "./provisioning.controller";
 import {
+  listEmailSourcesQuerystringSchema,
+  listEmailSourcesResponseSchema,
   previewInboxBodySchema,
   previewInboxResponseSchema,
   registerEmailSourceBodySchema,
@@ -13,7 +16,24 @@ import {
 import { ProvisioningService } from "./provisioning.service";
 
 export const registerProvisioningRoutes = async (app: FastifyInstance): Promise<void> => {
-  const controller = new ProvisioningController(new ProvisioningService());
+  const controller = new ProvisioningController(new ProvisioningService(new EmailSourceRepository()));
+
+  app.get(
+    "/email-sources",
+    {
+      schema: {
+        tags: [openApiTags.emailProvisioning],
+        summary: "List email sources for an organisation",
+        description:
+          "Returns registered rows from Email_Source_Master for the given orgId. Set query includeConnectionStatus=true to run a live IMAP login per source (O(n) network calls; use sparingly). When false or omitted, each item has imap: null. orgId is caller-supplied (same trust model as registration).",
+        security: [{ vaultToken: [] }],
+        querystring: listEmailSourcesQuerystringSchema,
+        headers: registerEmailSourceHeadersSchema,
+        response: { 200: listEmailSourcesResponseSchema },
+      },
+    },
+    controller.listEmailSources,
+  );
 
   app.post(
     "/email-source/test",

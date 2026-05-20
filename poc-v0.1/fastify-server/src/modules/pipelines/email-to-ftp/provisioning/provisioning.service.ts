@@ -2,6 +2,7 @@ import { EmailSourceModel } from "../../../../infra/db";
 import { AppError } from "../../../../errors/appError";
 import { config } from "../../../../config";
 import { vaultClient } from "../../../../utils/vault-client";
+import { EmailSourceRepository } from "../../../../repositories/emailSource.repository";
 import { getMaxUidForMailbox } from "../integration/imap-mailbox-cursor";
 import { fetchInboxPreview, type PreviewMessagePayload } from "../integration/imap-inbox-preview";
 import { resolveRegisteredImapCredentials } from "../integration/vault-imap-resolve";
@@ -29,7 +30,29 @@ export interface PreviewInboxResult {
   messages: PreviewMessagePayload[];
 }
 
+export interface EmailSourceImapStatus {
+  active: boolean;
+  detail?: string;
+}
+
+export interface EmailSourceListItem {
+  email: string;
+  serviceId: string;
+  zoneId: string;
+  isActive: boolean;
+  lastProcessedUid: number;
+  createdAt: string;
+  updatedAt: string;
+  imap: EmailSourceImapStatus | null;
+}
+
+export interface ListEmailSourcesResult {
+  orgId: string;
+  sources: EmailSourceListItem[];
+}
+
 export class ProvisioningService {
+  constructor(private readonly emailSourceRepository: EmailSourceRepository) {}
   /**
    * Registers a new email source by:
    * 1. Probing the IMAP credentials against the mail server.
@@ -128,6 +151,63 @@ export class ProvisioningService {
         "EMAIL_SOURCE_PERSIST_FAILED",
       );
     }
+  }
+
+  /**
+   * Lists registered email sources for an organisation. Optionally runs a live IMAP probe per row
+   * (O(n) network calls — use sparingly).
+   */
+  async listEmailSourcesByOrg(
+    orgId: string,
+    vaultToken: string,
+    options: { includeConnectionStatus: boolean },
+  ): Promise<ListEmailSourcesResult> {
+    const trimmedOrg = orgId.trim();
+    if (!trimmedOrg) {
+      throw new AppError(400, "orgId is required.", "ORG_ID_REQUIRED");
+    }
+
+    const rows = await this.emailSourceRepository.findAllByOrganisationId(trimmedOrg);
+    const sources: EmailSourceListItem[] = [];
+
+    for (const row of rows) {
+      const base = {
+        email: row.email_address,
+        serviceId: row.vault_service_id,
+        zoneId: row.zone_id,
+        isActive: row.is_active,
+        lastProcessedUid: row.last_processed_uid,
+        createdAt: row.createdAt.toISOString(),
+        updatedAt: row.updatedAt.toISOString(),
+      };
+
+      if (!options.includeConnectionStatus) {
+        sources.push({ ...base, imap: null });
+        continue;
+      }
+
+      try {
+        const imapResult = await this.testEmailSourceConnection(
+          { email: row.email_address, serviceId: row.vault_service_id },
+          vaultToken,
+        );
+        sources.push({
+          ...base,
+          imap: {
+            active: imapResult.active,
+            ...(imapResult.detail ? { detail: imapResult.detail } : {}),
+          },
+        });
+      } catch (err) {
+        const msg = err instanceof AppError ? err.message : String(err);
+        sources.push({
+          ...base,
+          imap: { active: false, detail: msg },
+        });
+      }
+    }
+
+    return { orgId: trimmedOrg, sources };
   }
 
   /**
