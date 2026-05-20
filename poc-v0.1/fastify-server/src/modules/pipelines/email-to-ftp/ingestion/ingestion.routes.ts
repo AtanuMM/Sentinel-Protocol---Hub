@@ -18,7 +18,7 @@ export const registerEmailIngestionRoutes = async (app: FastifyInstance): Promis
         tags: [openApiTags.emailIngestion],
         summary: "Poll claim emails",
         description:
-          "Scans new IMAP UIDs, matches claim keywords, dedupes PDFs to landing bucket and Kafka trace events.",
+          "Scans new IMAP UIDs above the stored cursor (set at registration via max UID watermark by default). Resets with resetCursor only for deliberate reprocessing.",
         security: [{ vaultToken: [] }],
         body: pollClaimsBodySchema,
         headers: registerEmailSourceHeadersSchema,

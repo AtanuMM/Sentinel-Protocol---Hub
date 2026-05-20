@@ -10,6 +10,11 @@ export const registerEmailSourceBodySchema = {
     password: { type: "string", minLength: 1 },
     imapHost: { type: "string", minLength: 1 },
     imapPort: { type: "integer", minimum: 1, maximum: 65535, default: 993 },
+    /**
+     * When true (default), set `last_processed_uid` to the current max IMAP UID so polling only sees mail
+     * that arrives after registration. Set false to start from the oldest message (full backlog, legacy POC).
+     */
+    startFromCurrentMailboxWatermark: { type: "boolean", default: true },
   },
 } as const;
 
@@ -29,6 +34,8 @@ export interface RegisterEmailSourceInput {
   password: string;
   imapHost: string;
   imapPort?: number;
+  /** @default true — skip existing inbox; only UIDs after registration. */
+  startFromCurrentMailboxWatermark?: boolean;
 }
 
 export const testEmailSourceBodySchema = {
@@ -73,10 +80,14 @@ export const registerEmailSourceResponseSchema = {
     message: { type: "string" },
     data: {
       type: "object",
-      required: ["email", "orgId"],
+      required: ["email", "orgId", "lastProcessedUid"],
       properties: {
         email: { type: "string" },
         orgId: { type: "string" },
+        lastProcessedUid: {
+          type: "integer",
+          description: "Initial IMAP UID cursor (max UID in mailbox when watermark is used; 0 if disabled or empty mailbox).",
+        },
       },
     },
   },

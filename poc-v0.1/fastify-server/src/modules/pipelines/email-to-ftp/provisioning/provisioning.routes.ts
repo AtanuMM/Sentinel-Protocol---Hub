@@ -53,7 +53,8 @@ export const registerProvisioningRoutes = async (app: FastifyInstance): Promise<
       schema: {
         tags: [openApiTags.emailProvisioning],
         summary: "Register email source",
-        description: "Onboards an email source: IMAP probe, vault secret, Postgres row.",
+        description:
+          "Onboards an email source: IMAP probe, optional max-UID watermark (default: skip existing inbox), vault secret, Postgres row.",
         security: [{ vaultToken: [] }],
         body: registerEmailSourceBodySchema,
         headers: registerEmailSourceHeadersSchema,

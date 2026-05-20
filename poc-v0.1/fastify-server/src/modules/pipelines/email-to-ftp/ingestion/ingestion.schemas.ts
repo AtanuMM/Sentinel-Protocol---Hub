@@ -6,7 +6,11 @@ export const pollClaimsBodySchema = {
     email: { type: "string", minLength: 1 },
     serviceId: { type: "string", minLength: 1 },
     limit: { type: "integer", minimum: 1, maximum: 200 },
-    /** POC: set true to set last_processed_uid to 0 before scanning so existing inbox mail can be reprocessed (dedup still applies). */
+    /**
+     * Resets IMAP UID cursor to 0 before this run, so processing starts from the lowest UIDs (full backlog
+     * walk). Use only for deliberate reprocessing; not needed when `startFromCurrentMailboxWatermark` was used
+     * at registration. Dedup still applies.
+     */
     resetCursor: { type: "boolean" },
   },
 } as const;
@@ -24,7 +28,17 @@ export const pollClaimsIngestedItemSchema = {
 
 export const pollClaimsResponseSchema = {
   type: "object",
-  required: ["success", "email", "scannedUids", "claimKeywordMatches", "pdfsIngested", "ingested", "message"],
+  required: [
+    "success",
+    "email",
+    "scannedUids",
+    "claimKeywordMatches",
+    "pdfsIngested",
+    "ingested",
+    "message",
+    "lastProcessedUidBefore",
+    "lastProcessedUidAfter",
+  ],
   properties: {
     success: { type: "boolean", const: true },
     email: { type: "string" },
@@ -33,5 +47,13 @@ export const pollClaimsResponseSchema = {
     pdfsIngested: { type: "integer" },
     ingested: { type: "array", items: pollClaimsIngestedItemSchema },
     message: { type: "string" },
+    lastProcessedUidBefore: {
+      type: "integer",
+      description: "Email_Source_Master.last_processed_uid before this poll (only UIDs greater than this are candidates).",
+    },
+    lastProcessedUidAfter: {
+      type: "integer",
+      description: "Cursor after poll (max UID in this batch, or unchanged if nothing to scan).",
+    },
   },
 };

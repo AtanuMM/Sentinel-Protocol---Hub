@@ -9,6 +9,7 @@ import { IngestionTraceEvent } from "../../../../types/ingestionEvent";
 import { buildDedupKey } from "../../../../utils/dedupKey";
 import { findMatchedClaimKeywords, stripHtmlForScan } from "../integration/claim-text";
 import { createImapFlowClient } from "../integration/imap-flow-factory";
+import { getImapPollMailboxPath } from "../integration/imap-mailbox-cursor";
 import { splitPollParts } from "../integration/imap-claim-parts";
 import { resolveRegisteredImapCredentials } from "../integration/vault-imap-resolve";
 
@@ -50,6 +51,10 @@ export interface PollClaimsResult {
   pdfsIngested: number;
   ingested: PollClaimsIngestedItem[];
   message: string;
+  /** IMAP UID cursor before this poll (`Email_Source_Master.last_processed_uid`). */
+  lastProcessedUidBefore: number;
+  /** IMAP UID cursor after this poll (unchanged if nothing scanned). */
+  lastProcessedUidAfter: number;
 }
 
 export class EmailIngestionService {
@@ -81,7 +86,7 @@ export class EmailIngestionService {
     );
     const keywords = config.emailClaimKeywords;
     const bodyStoreMax = config.emailClaimBodyStoreMaxChars;
-    const mailboxPath = process.env.IMAP_POLL_MAILBOX?.trim() || "INBOX";
+    const mailboxPath = getImapPollMailboxPath();
 
     const client = createImapFlowClient(creds);
     await client.connect();
@@ -114,6 +119,8 @@ export class EmailIngestionService {
             pdfsIngested: 0,
             ingested: [],
             message: `No new messages (UID > ${lastUid}). If you need to reprocess mail already in the mailbox, call again with resetCursor: true.`,
+            lastProcessedUidBefore: lastUid,
+            lastProcessedUidAfter: lastUid,
           };
         }
 
@@ -270,6 +277,8 @@ export class EmailIngestionService {
             ingested.length > 0
               ? `Ingested ${ingested.length} PDF(s); scanned ${scannedUids} UID(s).`
               : `Scanned ${scannedUids} UID(s); no new claim PDFs ingested.`,
+          lastProcessedUidBefore: lastUid,
+          lastProcessedUidAfter: maxSeen,
         };
       } finally {
         lock.release();

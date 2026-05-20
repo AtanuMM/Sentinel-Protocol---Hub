@@ -2,6 +2,7 @@ import { EmailSourceModel } from "../../../../infra/db";
 import { AppError } from "../../../../errors/appError";
 import { config } from "../../../../config";
 import { vaultClient } from "../../../../utils/vault-client";
+import { getMaxUidForMailbox } from "../integration/imap-mailbox-cursor";
 import { fetchInboxPreview, type PreviewMessagePayload } from "../integration/imap-inbox-preview";
 import { resolveRegisteredImapCredentials } from "../integration/vault-imap-resolve";
 import { testImapConnection } from "../integration/imap-tester";
@@ -14,6 +15,8 @@ import type {
 export interface RegisterEmailSourceResult {
   email: string;
   orgId: string;
+  /** IMAP UID cursor stored at registration (max UID in mailbox when watermark used). */
+  lastProcessedUid: number;
 }
 
 export interface TestEmailSourceResult {
@@ -30,8 +33,9 @@ export class ProvisioningService {
   /**
    * Registers a new email source by:
    * 1. Probing the IMAP credentials against the mail server.
-   * 2. Storing credentials in Key Vault (single source of truth for host/port/password).
-   * 3. Persisting email, org, service id, and is_active in Postgres (no imap/vault row ids).
+   * 2. Optionally reading the current max UID in the poll mailbox (default) so `last_processed_uid` skips existing backlog.
+   * 3. Storing credentials in Key Vault (single source of truth for host/port/password).
+   * 4. Persisting email, org, service id, and is_active in Postgres (no imap/vault row ids).
    *
    * On DB failure after a successful Vault write, attempts to delete the
    * orphan Vault secret to keep state consistent.
@@ -40,7 +44,8 @@ export class ProvisioningService {
     input: RegisterEmailSourceInput,
     vaultToken: string,
   ): Promise<RegisterEmailSourceResult> {
-    const { orgId, serviceId, email, password, imapHost } = input;
+    const { orgId, serviceId, password, imapHost } = input;
+    const email = input.email.trim();
     const imapPort = Number(input.imapPort) || 993;
     const zoneId = (input.zoneId && input.zoneId.trim()) || config.defaultEmailZone;
 
@@ -53,6 +58,22 @@ export class ProvisioningService {
 
     if (!connectionTest.success) {
       throw new AppError(401, `IMAP Connection Failed: ${connectionTest.error}`, "IMAP_AUTH_FAILED");
+    }
+
+    const useMailboxWatermark = input.startFromCurrentMailboxWatermark !== false;
+    let initialLastProcessedUid = 0;
+    if (useMailboxWatermark) {
+      try {
+        initialLastProcessedUid = await getMaxUidForMailbox({
+          host: imapHost,
+          port: imapPort,
+          user: email,
+          pass: password,
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        throw new AppError(502, `Failed to read mailbox UID watermark: ${msg}`, "IMAP_MAILBOX_CURSOR_FAILED");
+      }
     }
 
     const vaultKeyName = `imap:${email}`;
@@ -86,13 +107,14 @@ export class ProvisioningService {
         email_address: email,
         vault_service_id: serviceId,
         zone_id: zoneId,
-        last_processed_uid: 0,
+        last_processed_uid: initialLastProcessedUid,
         is_active: true,
       } as never);
 
       return {
         email: newSource.email_address,
         orgId: newSource.organisation_id,
+        lastProcessedUid: initialLastProcessedUid,
       };
     } catch (dbErr) {
       try {
