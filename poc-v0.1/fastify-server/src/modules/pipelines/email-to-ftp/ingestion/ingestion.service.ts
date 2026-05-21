@@ -7,19 +7,24 @@ import { minioClient, producer, redisClient } from "../../../../infra/clients";
 import { EmailClaimArtifactRepository } from "../../../../repositories/emailClaimArtifact.repository";
 import { IngestionTraceEvent } from "../../../../types/ingestionEvent";
 import { buildDedupKey } from "../../../../utils/dedupKey";
+import { deleteRedisKeysByPattern } from "../../../../utils/redisScanDel";
 import { findMatchedClaimKeywords, stripHtmlForScan } from "../integration/claim-text";
 import {
   sanitizeAttachmentFilename,
   sanitizeSubjectForKey,
+  sanitizeUidValidityForSegment,
 } from "../integration/email-subject-key";
+import {
+  buildEmailTranscriptPdfBuffer,
+  formatEnvelopeFromForTranscript,
+  type TranscriptAddressLike,
+} from "../integration/email-transcript-pdf";
 import { createImapFlowClient } from "../integration/imap-flow-factory";
 import { getImapPollMailboxPath } from "../integration/imap-mailbox-cursor";
 import { splitPollParts } from "../integration/imap-claim-parts";
 import { resolveRegisteredImapCredentials } from "../integration/vault-imap-resolve";
 
-/** Safety cap for MIME-encoded or unusually long envelope subjects stored on artifacts. */
-const EMAIL_SUBJECT_STORE_MAX_CHARS = 4096;
-
+const EMAIL_TRANSCRIPT_OBJECT = "email-transcript.pdf";
 const withRetries = async <T>(fn: () => Promise<T>, attempts = 3): Promise<T> => {
   let lastErr: unknown;
   for (let i = 0; i < attempts; i += 1) {
@@ -80,6 +85,8 @@ export class EmailIngestionService {
     if (input.resetCursor === true) {
       await EmailSourceModel.update({ last_processed_uid: 0 }, { where: { email_address: emailKey } });
       await row.reload();
+      const dedupFlushPattern = `file:dedup:email:${row.organisation_id}:imap:${emailKey}:*`;
+      await deleteRedisKeysByPattern(redisClient, dedupFlushPattern);
     }
 
     const creds = await resolveRegisteredImapCredentials(emailKey, input.serviceId, vaultToken);
@@ -132,7 +139,10 @@ export class EmailIngestionService {
         const zoneId = row.zone_id;
         const today = new Date().toISOString().split("T")[0];
 
+        let maxSeenUid = lastUid;
+        try {
         for (const uid of newUids) {
+          maxSeenUid = uid;
           scannedUids += 1;
           const msg = await client.fetchOne(
             String(uid),
@@ -172,17 +182,51 @@ export class EmailIngestionService {
             continue;
           }
 
-          const storedSubjectText = subject.slice(0, EMAIL_SUBJECT_STORE_MAX_CHARS);
-          const bodyOnlyCombined = [textBody, stripHtmlForScan(htmlRaw)].filter(Boolean).join("\n");
-          const storedBodyText = bodyOnlyCombined.slice(0, bodyStoreMax);
           const rfcMessageId = msg.envelope?.messageId ?? null;
           const sanitizedSubject = sanitizeSubjectForKey(subject);
+          const bodyPlainForTranscript = [textBody, stripHtmlForScan(htmlRaw)]
+            .filter(Boolean)
+            .join("\n")
+            .slice(0, bodyStoreMax);
 
           const downloaded = await client.downloadMany(
             String(uid),
             pdfParts.map((p) => p.part),
             { uid: true },
           );
+
+          const vvSeg = sanitizeUidValidityForSegment(uidValidity);
+          const folderPrefix = `${orgId}/${zoneId}/${today}/email/${sanitizedSubject}__uid-${uid}__vv-${vvSeg}/`;
+          const transcriptKey = `${folderPrefix}${EMAIL_TRANSCRIPT_OBJECT}`;
+
+          const internalDateRaw = (msg as { internalDate?: Date | string | null }).internalDate;
+          const dateLine =
+            internalDateRaw != null
+              ? new Date(internalDateRaw).toISOString()
+              : msg.envelope?.date != null
+                ? String(msg.envelope.date)
+                : null;
+
+          const transcriptBuf = await buildEmailTranscriptPdfBuffer({
+            subject,
+            bodyPlain: bodyPlainForTranscript,
+            fromLine: formatEnvelopeFromForTranscript(
+              msg.envelope?.from as TranscriptAddressLike[] | undefined,
+            ),
+            dateLine,
+            messageIdLine: rfcMessageId,
+          });
+
+          await minioClient.putObject(
+            config.landingBucket,
+            transcriptKey,
+            Readable.from(transcriptBuf),
+            transcriptBuf.length,
+            { "Content-Type": "application/pdf" },
+          );
+
+          /** Same bytes can appear under multiple MIME leaves (e.g. inline + attachment); Redis dedup uses filename so keys differ. */
+          const uploadedPdfShaInThisUid = new Set<string>();
 
           for (const pdf of pdfParts) {
             const buf = downloaded[pdf.part]?.content;
@@ -204,13 +248,18 @@ export class EmailIngestionService {
               continue;
             }
 
+            if (uploadedPdfShaInThisUid.has(pdfSha256)) {
+              await redisClient.del(dedupKey);
+              continue;
+            }
+
             const traceId = randomUUID();
-            const traceShort = traceId.slice(0, 8);
             const safeAttachmentName = sanitizeAttachmentFilename(pdf.filename);
-            const landingPath = `${orgId}/${zoneId}/${today}/email/${sanitizedSubject}__${traceShort}/${traceId}__${safeAttachmentName}`;
+            const landingPath = `${folderPrefix}${traceId}__${safeAttachmentName}`;
             const artifactId = randomUUID();
             const originalPath = `email://${emailKey}/imap/${mailboxPath}/uid/${uid}/${pdf.filename}`;
 
+            let attachmentUploaded = false;
             try {
               await minioClient.putObject(
                 config.landingBucket,
@@ -219,6 +268,8 @@ export class EmailIngestionService {
                 buf.length,
                 { "Content-Type": "application/pdf" },
               );
+              attachmentUploaded = true;
+              uploadedPdfShaInThisUid.add(pdfSha256);
 
               await this.artifactRepository.create({
                 id: artifactId,
@@ -229,8 +280,6 @@ export class EmailIngestionService {
                 imap_mailbox: mailboxPath,
                 imap_uidvalidity: uidValidity,
                 rfc_message_id: rfcMessageId,
-                email_subject_text: storedSubjectText,
-                email_body_text: storedBodyText,
                 matched_keywords: matchedKw,
                 trace_id: traceId,
                 landing_path: landingPath,
@@ -265,14 +314,18 @@ export class EmailIngestionService {
                 attachmentFilename: pdf.filename,
               });
             } catch (err) {
-              await redisClient.del(dedupKey);
+              if (!attachmentUploaded) {
+                await redisClient.del(dedupKey);
+              }
               throw err;
             }
           }
         }
-
-        const maxSeen = Math.max(...newUids);
-        await EmailSourceModel.update({ last_processed_uid: maxSeen }, { where: { email_address: emailKey } });
+        } finally {
+          if (maxSeenUid > lastUid) {
+            await EmailSourceModel.update({ last_processed_uid: maxSeenUid }, { where: { email_address: emailKey } });
+          }
+        }
 
         return {
           email: emailKey,
@@ -285,7 +338,7 @@ export class EmailIngestionService {
               ? `Ingested ${ingested.length} PDF(s); scanned ${scannedUids} UID(s).`
               : `Scanned ${scannedUids} UID(s); no new claim PDFs ingested.`,
           lastProcessedUidBefore: lastUid,
-          lastProcessedUidAfter: maxSeen,
+          lastProcessedUidAfter: maxSeenUid,
         };
       } finally {
         lock.release();

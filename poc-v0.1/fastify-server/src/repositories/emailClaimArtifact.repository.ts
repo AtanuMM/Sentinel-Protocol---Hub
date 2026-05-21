@@ -9,8 +9,6 @@ export interface CreateEmailClaimArtifactInput {
   imap_mailbox: string;
   imap_uidvalidity: string | null;
   rfc_message_id: string | null;
-  email_subject_text: string;
-  email_body_text: string;
   matched_keywords: string[];
   trace_id: string;
   landing_path: string;

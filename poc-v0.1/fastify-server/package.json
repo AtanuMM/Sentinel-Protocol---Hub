@@ -29,6 +29,7 @@
     "ioredis": "^5.10.0",
     "kafkajs": "^2.2.4",
     "minio": "^8.0.7",
+    "pdfkit": "^0.17.2",
     "pg": "^8.20.0",
     "pg-hstore": "^2.3.4",
     "sequelize": "^6.37.8",
@@ -37,6 +38,7 @@
   },
   "devDependencies": {
     "@types/node": "^24.12.2",
+    "@types/pdfkit": "^0.17.3",
     "@typescript-eslint/eslint-plugin": "^8.46.1",
     "@typescript-eslint/parser": "^8.46.1",
     "eslint": "^9.39.1",

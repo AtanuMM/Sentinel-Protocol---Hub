@@ -10,6 +10,23 @@ const SUBJECT_MAX_LEN = 80;
 const FILENAME_MAX_LEN = 120;
 const SUBJECT_FALLBACK = "no-subject";
 const FILENAME_FALLBACK = "attachment.pdf";
+const UIDVALIDITY_MAX_LEN = 40;
+const UIDVALIDITY_FALLBACK = "na";
+
+/**
+ * IMAP UIDVALIDITY as a single path segment (digits only in practice; strip anything else).
+ */
+export function sanitizeUidValidityForSegment(uidValidity: string | null | undefined): string {
+  if (!uidValidity) {
+    return UIDVALIDITY_FALLBACK;
+  }
+  const trimmed = uidValidity.trim();
+  if (trimmed.length === 0) {
+    return UIDVALIDITY_FALLBACK;
+  }
+  const safe = trimmed.replace(/[^A-Za-z0-9._-]+/g, "").slice(0, UIDVALIDITY_MAX_LEN);
+  return safe.length > 0 ? safe : UIDVALIDITY_FALLBACK;
+}
 
 /**
  * Slugify an email subject for use as a folder segment.
