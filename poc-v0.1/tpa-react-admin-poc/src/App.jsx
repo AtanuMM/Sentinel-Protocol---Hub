@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 
 function App() {
   const [status, setStatus] = useState({ msg: 'System Standby', type: 'info' });
@@ -80,6 +80,18 @@ function App() {
     }
   });
 
+  const [emailSources, setEmailSources] = useState([]);
+  const [emailSourcesLoading, setEmailSourcesLoading] = useState(false);
+  const [emailSourcesError, setEmailSourcesError] = useState(null);
+  const [emailSourcesReloadKey, setEmailSourcesReloadKey] = useState(0);
+
+  const bumpEmailSourcesReload = () => setEmailSourcesReloadKey((k) => k + 1);
+
+  const [pollModalOpen, setPollModalOpen] = useState(false);
+  const [pollResult, setPollResult] = useState(null);
+  const [pollError, setPollError] = useState(null);
+  const [pollLoading, setPollLoading] = useState(false);
+
   // --- API: PING TEST ---
   const checkServerLink = async () => {
     setServerStatus('checking');
@@ -90,7 +102,7 @@ function App() {
         setServerStatus('online');
         setStatus({ msg: 'Server Link Established: System Ready', type: 'success' });
       }
-    } catch (err) {
+    } catch {
       setServerStatus('offline');
       setStatus({ msg: 'Server Link Failed: Is the Backend running?', type: 'error' });
     }
@@ -147,7 +159,7 @@ function App() {
         msg: data.message || `Integration Active: ${formData.username} linked.`, 
         type: 'success' 
       });
-    } catch (err) {
+    } catch {
       setStatus({ msg: 'Integration Handshake Failed.', type: 'error' });
     } finally {
       setLoading(false);
@@ -184,8 +196,95 @@ function App() {
   const currentChannel = feed.find(f => f.organisation_id === orgId);
   const isOnboarded = currentChannel?.is_onboarded || false;
 
+  const vaultTokenForList =
+    typeof window !== 'undefined' ? localStorage.getItem('sentinel.apiKey')?.trim() ?? '' : '';
+  const canListEmailSources = vaultActive && Boolean(vaultTokenForList);
+
+  const pollServiceId =
+    typeof window !== 'undefined' ? localStorage.getItem('email-service-id')?.trim() ?? '' : '';
+  let pollMailboxEmail = '';
+  if (Array.isArray(emailSources) && emailSources.length > 0 && emailSources[0]?.email) {
+    pollMailboxEmail = String(emailSources[0].email).trim();
+  } else if (typeof window !== 'undefined') {
+    try {
+      const raw = localStorage.getItem('sentinel.lastEmailSource');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        pollMailboxEmail = String(parsed?.email ?? '').trim();
+      }
+    } catch {
+      pollMailboxEmail = '';
+    }
+  }
+  const canPollClaims = canListEmailSources && Boolean(pollServiceId) && Boolean(pollMailboxEmail);
+
+  const closePollModal = () => {
+    setPollModalOpen(false);
+    setPollResult(null);
+    setPollError(null);
+    setPollLoading(false);
+  };
+
+  const runPollClaimEmails = async () => {
+    const apiKey = typeof window !== 'undefined' ? localStorage.getItem('sentinel.apiKey')?.trim() : '';
+    const serviceId =
+      typeof window !== 'undefined' ? localStorage.getItem('email-service-id')?.trim() : '';
+    let email = '';
+    if (Array.isArray(emailSources) && emailSources.length > 0 && emailSources[0]?.email) {
+      email = String(emailSources[0].email).trim();
+    } else if (typeof window !== 'undefined') {
+      try {
+        const raw = localStorage.getItem('sentinel.lastEmailSource');
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          email = String(parsed?.email ?? '').trim();
+        }
+      } catch {
+        email = '';
+      }
+    }
+    if (!apiKey || !serviceId || !email) {
+      setPollResult(null);
+      setPollError(
+        'Poll requires Vault API key, email service id (set up Vault email service), and a mailbox email (register a source or load the email list).',
+      );
+      setPollModalOpen(true);
+      return;
+    }
+    setPollError(null);
+    setPollResult(null);
+    setPollModalOpen(true);
+    setPollLoading(true);
+    try {
+      const res = await fetch('http://localhost:3000/api/email-to-ftp/email-source/poll-claims', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-vault-token': apiKey,
+        },
+        body: JSON.stringify({ email, serviceId }),
+      });
+      let data = {};
+      try {
+        data = await res.json();
+      } catch {
+        data = {};
+      }
+      if (!res.ok || !data.success) {
+        const detail = data.detail || data.message || data.error || `HTTP ${res.status}`;
+        setPollError(typeof detail === 'string' ? detail : JSON.stringify(detail));
+        return;
+      }
+      setPollResult(data);
+      bumpEmailSourcesReload();
+    } catch (err) {
+      setPollError(err.message || 'Poll failed');
+    } finally {
+      setPollLoading(false);
+    }
+  };
+
   // Function Wrappers
-  const onboardOrg = () => triggerAction('onboard-org', 'Initializing Org Hierarchy...');
   const initializeToday = () => triggerAction('init-today', 'Provisioning Date-Partition...');
 
   const triggerAction = async (endpoint, startMsg) => {
@@ -212,7 +311,7 @@ function App() {
     }
   };
 
-  React.useEffect(() => {
+  useEffect(() => {
     // 1. Create an AbortController to cancel pending requests if the component unmounts
     const controller = new AbortController();
     
@@ -243,6 +342,69 @@ function App() {
       controller.abort(); // Cancel the fetch if the user leaves the page
     };
   }, []); // orgId/zone omitted because they are constants in your current state
+
+  // Email sources: includeConnectionStatus runs live IMAP per row — no 5s poll; mount + manual refresh + after registration.
+  useEffect(() => {
+    if (!vaultActive) {
+      setEmailSources([]);
+      setEmailSourcesLoading(false);
+      setEmailSourcesError(null);
+      return undefined;
+    }
+    const apiKey = typeof window !== 'undefined' ? localStorage.getItem('sentinel.apiKey')?.trim() : '';
+    if (!apiKey) {
+      setEmailSources([]);
+      setEmailSourcesLoading(false);
+      setEmailSourcesError(null);
+      return undefined;
+    }
+
+    const controller = new AbortController();
+    let cancelled = false;
+
+    const run = async () => {
+      setEmailSourcesLoading(true);
+      setEmailSourcesError(null);
+      try {
+        const url = `http://localhost:3000/api/email-to-ftp/email-sources?orgId=${encodeURIComponent(orgId)}&includeConnectionStatus=true`;
+        const res = await fetch(url, {
+          signal: controller.signal,
+          headers: { 'x-vault-token': apiKey },
+        });
+        let data = {};
+        try {
+          data = await res.json();
+        } catch {
+          data = {};
+        }
+        if (cancelled) return;
+        if (!res.ok) {
+          const msg = data.detail || data.message || data.error || `HTTP ${res.status}`;
+          setEmailSourcesError(typeof msg === 'string' ? msg : JSON.stringify(msg));
+          setEmailSources([]);
+          return;
+        }
+        if (!data.success) {
+          setEmailSourcesError(data.message || 'List email sources failed.');
+          setEmailSources([]);
+          return;
+        }
+        setEmailSources(Array.isArray(data.sources) ? data.sources : []);
+      } catch (err) {
+        if (cancelled || err.name === 'AbortError') return;
+        setEmailSourcesError(err.message || 'Request failed');
+        setEmailSources([]);
+      } finally {
+        if (!cancelled) setEmailSourcesLoading(false);
+      }
+    };
+
+    run();
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [orgId, vaultActive, emailSourcesReloadKey]);
 
   const hasEmailServiceId =
     typeof window !== 'undefined' && Boolean(localStorage.getItem('email-service-id'));
@@ -357,6 +519,7 @@ function App() {
         msg: `Email source registered (${data.data?.email ?? persisted.email}).`,
         type: 'success',
       });
+      bumpEmailSourcesReload();
     } catch (err) {
       setStatus({ msg: `Email Setup Error: ${err.message}`, type: 'error' });
     } finally {
@@ -848,11 +1011,155 @@ function App() {
             </div>
           </div>
         )}
+
+        {pollModalOpen && (
+          <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <div className="bg-sentinel-card border border-slate-700 w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-2xl p-8 shadow-2xl animate-in zoom-in-95 duration-200">
+              <div className="mb-6">
+                <h3 className="text-2xl font-bold text-white">
+                  {pollResult?.email ? `Claims poll — ${pollResult.email}` : 'Claims email poll'}
+                </h3>
+                <p className="text-slate-400 text-xs font-mono tracking-tighter opacity-70 mt-1">
+                  POST /api/email-to-ftp/email-source/poll-claims
+                </p>
+              </div>
+
+              {pollLoading && (
+                <p className="text-slate-400 text-sm font-mono mb-4">Polling…</p>
+              )}
+
+              {pollError && (
+                <div className="rounded-lg border border-rose-500/40 bg-rose-500/10 p-4 text-rose-300 text-sm mb-4">
+                  {pollError}
+                </div>
+              )}
+
+              {pollResult && !pollLoading && (
+                <div className="space-y-4 text-sm">
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                    <div className="rounded-lg border border-slate-700 bg-slate-900/40 p-3">
+                      <div className="text-[10px] uppercase tracking-widest text-slate-500 font-bold mb-1">
+                        scanned_uids
+                      </div>
+                      <div className="font-mono text-sentinel-accent text-lg">{pollResult.scannedUids}</div>
+                    </div>
+                    <div className="rounded-lg border border-slate-700 bg-slate-900/40 p-3">
+                      <div className="text-[10px] uppercase tracking-widest text-slate-500 font-bold mb-1">
+                        claim_matches
+                      </div>
+                      <div className="font-mono text-sentinel-accent text-lg">{pollResult.claimKeywordMatches}</div>
+                    </div>
+                    <div className="rounded-lg border border-slate-700 bg-slate-900/40 p-3">
+                      <div className="text-[10px] uppercase tracking-widest text-slate-500 font-bold mb-1">
+                        pdfs_ingested
+                      </div>
+                      <div className="font-mono text-sentinel-accent text-lg">{pollResult.pdfsIngested}</div>
+                    </div>
+                  </div>
+                  <p className="text-xs font-mono text-slate-400">
+                    UID cursor:{' '}
+                    <span className="text-slate-200">{pollResult.lastProcessedUidBefore}</span>
+                    {' → '}
+                    <span className="text-slate-200">{pollResult.lastProcessedUidAfter}</span>
+                  </p>
+                  <div className="rounded-lg border border-slate-700 bg-slate-900/40 p-4 text-slate-300">
+                    {pollResult.message}
+                  </div>
+                  {Array.isArray(pollResult.ingested) && pollResult.ingested.length > 0 ? (
+                    <div>
+                      <div className="text-[10px] uppercase tracking-widest text-slate-500 font-bold mb-2">
+                        Ingested artifacts
+                      </div>
+                      <div className="border border-slate-800 rounded-xl overflow-hidden">
+                        <table className="w-full text-left text-xs font-mono">
+                          <thead>
+                            <tr className="border-b border-slate-800 bg-slate-800/30 text-slate-500">
+                              <th className="p-3 font-medium">FILE</th>
+                              <th className="p-3 font-medium">TRACE_ID</th>
+                              <th className="p-3 font-medium">LANDING_PATH</th>
+                              <th className="p-3 font-medium">SHA256</th>
+                              <th className="p-3 font-medium w-24">ACTION</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {pollResult.ingested.map((row, idx) => (
+                              <tr
+                                key={`${row.traceId}-${idx}`}
+                                className="border-b border-slate-800/50 hover:bg-white/5 transition-colors"
+                              >
+                                <td className="p-3 text-slate-200">{row.attachmentFilename}</td>
+                                <td className="p-3 text-slate-400" title={row.traceId}>
+                                  {row.traceId.slice(0, 8)}…
+                                </td>
+                                <td className="p-3 text-slate-500 max-w-[180px] truncate" title={row.landingPath}>
+                                  {row.landingPath}
+                                </td>
+                                <td className="p-3 text-slate-500 max-w-[120px] truncate font-mono text-[10px]" title={row.pdfSha256}>
+                                  {row.pdfSha256 && row.pdfSha256.length > 14
+                                    ? `${row.pdfSha256.slice(0, 12)}…`
+                                    : row.pdfSha256}
+                                </td>
+                                <td className="p-3">
+                                  <button
+                                    type="button"
+                                    onClick={() => navigator.clipboard?.writeText(row.landingPath)}
+                                    className="text-[10px] font-bold uppercase text-sentinel-accent hover:underline"
+                                  >
+                                    Copy path
+                                  </button>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  ) : (
+                    !pollLoading &&
+                    pollResult && (
+                      <p className="text-slate-500 text-xs italic">
+                        No landing artifacts in the `ingested` array for this run (see counts above).
+                      </p>
+                    )
+                  )}
+                </div>
+              )}
+
+              <div className="flex gap-4 pt-4 border-t border-slate-700 mt-6">
+                <button
+                  type="button"
+                  onClick={closePollModal}
+                  className="w-full py-3 bg-sentinel-accent text-slate-900 font-bold rounded-xl hover:bg-sky-400 transition-colors uppercase tracking-widest text-xs italic"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </main>
     {/* Live Activity Feed */}
     <section className="w-full mx-auto mt-12 animate-in fade-in slide-in-from-bottom-4 duration-700">
-            <div className="mb-4 flex items-center justify-end">
+            <div className="mb-4 flex flex-wrap items-center justify-end gap-3">
               <button
+                type="button"
+                disabled={pollLoading || !canPollClaims}
+                title={
+                  canPollClaims
+                    ? 'Run one IMAP poll for claim PDFs'
+                    : 'Requires Vault key, email service id, and a known mailbox email'
+                }
+                onClick={runPollClaimEmails}
+                className={`py-2.5 px-4 font-bold rounded-xl transition-all uppercase text-[11px] tracking-widest ${
+                  canPollClaims && !pollLoading
+                    ? 'bg-sentinel-accent hover:bg-sky-400 text-slate-900'
+                    : 'bg-slate-800 text-slate-500 cursor-not-allowed'
+                }`}
+              >
+                {pollLoading ? 'Polling…' : 'Poll to Fetch Emails'}
+              </button>
+              <button
+                type="button"
                 disabled={loading || !isOnboarded}
                 onClick={initializeToday}
                 className={`py-2.5 px-4 font-bold rounded-xl transition-all uppercase text-[11px] tracking-widest ${
@@ -870,6 +1177,10 @@ function App() {
                 Real-Time Ingress Monitor
               </h3>
             </div>
+
+            <h4 className="text-[10px] font-bold uppercase tracking-[0.2em] text-slate-500 mb-2">
+              FTP server connections
+            </h4>
             
             <div className="bg-slate-900/50 border border-slate-800 rounded-2xl overflow-hidden backdrop-blur-md">
               <table className="w-full text-left text-xs font-mono">
@@ -905,6 +1216,105 @@ function App() {
                     <tr>
                       <td colSpan="4" className="p-8 text-center text-slate-600 italic">
                         Waiting for handshake signal...
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="flex flex-wrap items-center justify-between gap-3 mt-10 mb-2">
+              <h4 className="text-[10px] font-bold uppercase tracking-[0.2em] text-slate-500">
+                Email Sources Connections
+              </h4>
+              <button
+                type="button"
+                onClick={bumpEmailSourcesReload}
+                disabled={!canListEmailSources || emailSourcesLoading}
+                className="py-2 px-3 font-bold rounded-lg transition-all uppercase text-[10px] tracking-widest border border-slate-600 bg-slate-800 text-slate-300 hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {emailSourcesLoading ? 'Refreshing…' : 'Refresh'}
+              </button>
+            </div>
+
+            <div className="bg-slate-900/50 border border-slate-800 rounded-2xl overflow-hidden backdrop-blur-md">
+              <table className="w-full text-left text-xs font-mono">
+                <thead>
+                  <tr className="border-b border-slate-800 bg-slate-800/30 text-slate-500">
+                    <th className="p-4 font-medium">EMAIL</th>
+                    <th className="p-4 font-medium">SERVICE_ID</th>
+                    <th className="p-4 font-medium">ZONE_ID</th>
+                    <th className="p-4 font-medium">STATUS</th>
+                    <th className="p-4 font-medium">IMAP_ACTIVE</th>
+                    <th className="p-4 font-medium">LAST_PROCESSED_UID</th>
+                    <th className="p-4 font-medium">UPDATED_AT</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {!canListEmailSources ? (
+                    <tr>
+                      <td colSpan="7" className="p-8 text-center text-slate-600 italic">
+                        Vault API key required to list email sources.
+                      </td>
+                    </tr>
+                  ) : emailSourcesError ? (
+                    <tr>
+                      <td colSpan="7" className="p-8 text-center text-rose-400/90 text-xs">
+                        {emailSourcesError}
+                      </td>
+                    </tr>
+                  ) : emailSourcesLoading && emailSources.length === 0 ? (
+                    <tr>
+                      <td colSpan="7" className="p-8 text-center text-slate-600 italic">
+                        Loading…
+                      </td>
+                    </tr>
+                  ) : emailSources.length > 0 ? (
+                    emailSources.map((row) => (
+                      <tr key={`${row.serviceId}-${row.email}`} className="border-b border-slate-800/50 hover:bg-white/5 transition-colors">
+                        <td className="p-4 text-sentinel-accent font-bold">{row.email}</td>
+                        <td className="p-4 text-slate-400 break-all max-w-[140px]" title={row.serviceId}>
+                          {row.serviceId}
+                        </td>
+                        <td className="p-4 text-slate-300">{row.zoneId}</td>
+                        <td className="p-4">
+                          {row.isActive ? (
+                            <span className="px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 text-[10px] flex items-center gap-1.5 w-fit">
+                              <span className="h-1 w-1 bg-emerald-500 rounded-full animate-pulse" />
+                              ACTIVE
+                            </span>
+                          ) : (
+                            <span className="px-2 py-0.5 rounded-md bg-rose-500/10 text-rose-400 border border-rose-500/20 text-[10px] flex items-center gap-1.5 w-fit">
+                              <span className="h-1 w-1 bg-rose-400 rounded-full" />
+                              INACTIVE
+                            </span>
+                          )}
+                        </td>
+                        <td className="p-4">
+                          {row.imap == null ? (
+                            <span className="text-slate-500">—</span>
+                          ) : row.imap.active ? (
+                            <span className="px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 text-[10px] w-fit inline-flex items-center gap-1.5">
+                              <span className="h-1 w-1 bg-emerald-500 rounded-full" />
+                              TRUE
+                            </span>
+                          ) : (
+                            <span className="px-2 py-0.5 rounded-md bg-amber-500/10 text-amber-500 border border-amber-500/20 text-[10px] w-fit inline-flex items-center gap-1.5">
+                              <span className="h-1 w-1 bg-amber-500 rounded-full" />
+                              FALSE
+                            </span>
+                          )}
+                        </td>
+                        <td className="p-4 text-slate-300">{String(row.lastProcessedUid ?? '')}</td>
+                        <td className="p-4 text-slate-500">
+                          {row.updatedAt ? new Date(row.updatedAt).toLocaleString() : '—'}
+                        </td>
+                      </tr>
+                    ))
+                  ) : (
+                    <tr>
+                      <td colSpan="7" className="p-8 text-center text-slate-600 italic">
+                        No email sources registered for this organisation.
                       </td>
                     </tr>
                   )}
