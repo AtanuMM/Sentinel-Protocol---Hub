@@ -128,31 +128,25 @@ services:
     volumes:
       - roundcube_data:/var/roundcube/db
 
-volumes:
-  roundcube_data:
-
-  # 6. THE HARVESTER (Sentinel Node.js Pod) - ON HOLD
-  # harvester:
-  #   build: .
-  #   container_name: sentinel-harvester
-  #   ports:
-  #     - "3000:3000"
-  #   depends_on:
-  #     - db
-  #     - minio
-  #     - redis
-  #     - kafka
+  # 6. INGESTION MICROSERVICES (optional local compose) — see ftp-to-ftp-server / email-to-ftp-server READMEs
+  # ftp-harvester:
+  #   build: ./ftp-to-ftp-server
+  #   ports: ["3000:3000"]
+  # email-harvester:
+  #   build: ./email-to-ftp-server
+  #   ports: ["3001:3001"]
+  #   depends_on: [db, minio, redis, kafka]
   #   environment:
   #     DB_URL: postgres://postgres:postgres123@db:5432/sentinel_mdm
-  #     REDIS_URL: redis://redis:6379 # Internal Docker Network Port
+  #     REDIS_URL: redis://redis:6379
   #     KAFKA_BOOTSTRAP_SERVERS: kafka:29092
   #     MINIO_ENDPOINT: minio
   #     MINIO_ACCESS_KEY: admin
   #     MINIO_SECRET_KEY: SuperSecret123
   #     NODE_ENV: development
-  
 
-
+volumes:
+  roundcube_data:
 #   services:
 #   # 1. S3 SIMULATOR
 #   minio:

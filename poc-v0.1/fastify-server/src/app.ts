@@ -1,3 +1,7 @@
+/**
+ * Legacy monolith: both pipelines in one process. Prefer `poc-v0.1/ftp-to-ftp-server`
+ * and `poc-v0.1/email-to-ftp-server` for new deployments.
+ */
 import crypto from "crypto";
 import cors from "@fastify/cors";
 import sensible from "@fastify/sensible";

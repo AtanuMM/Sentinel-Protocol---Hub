@@ -10,7 +10,9 @@
 root/
 ├── key-vault/              → Standalone secret management service (Fastify + Prisma + PostgreSQL)
 ├── poc-v0.1/
-│   ├── fastify-server/     → Core ingestion backend (Fastify + Sequelize + Kafka + MinIO + Redis)
+│   ├── fastify-server/     → Legacy all-in-one ingestion (both pipelines; Port 3000)
+│   ├── ftp-to-ftp-server/  → FTP-to-FTP microservice (default Port 3000)
+│   ├── email-to-ftp-server/→ Email-to-FTP microservice (default Port 3001)
 │   └── tpa-react-admin-poc/→ Internal admin control plane (React + Tailwind, minimal UI)
 ├── ngenclaim-mock/         → Insurance claims dashboard UI (React + Vite + Tailwind + Recharts)
 └── docker-compose.yml      → Root infra (Postgres only at root level)
@@ -29,16 +31,21 @@ root/
 
 ---
 
-### B. `poc-v0.1/fastify-server` — Sentinel Harvester (Core Ingestion Backend)
-**Purpose:** Event-driven file ingestion pipeline. Receives webhook events from MinIO when TPAs upload PDFs, deduplicates via Redis, streams files to a landing bucket, and signals downstream via Kafka.
+### B. Ingestion backends (`poc-v0.1/*-server`) — Sentinel Harvester
 
-**Stack:** Fastify 5, TypeScript, Sequelize 6, PostgreSQL, Redis (ioredis), KafkaJS, MinIO SDK, Vitest
+**Purpose:** Event-driven ingestion. **FTP-to-FTP:** MinIO webhook → Redis dedup → stream to landing bucket → Kafka trace. **Email-to-FTP:** IMAP polling, claim detection, landing upload, Kafka.
 
-**Run:** `npm run dev` → `tsx watch src/server.ts` → Port `3000`
+**Stack (each service):** Fastify 5, TypeScript, Sequelize 6, PostgreSQL, Redis (ioredis), KafkaJS, MinIO SDK, Vitest
 
-**Pipelines implemented:**
-- `ftp-to-ftp` — fully wired (webhook → dedup → stream → kafka)
-- `email-to-ftp` — scaffold exists, provisioning route live, ingestion coming soon
+| Package | Scope | Default port |
+|---------|--------|--------------|
+| `ftp-to-ftp-server` | FTP pipeline only (`/api/webhook`, provisioning, integration, feed) | 3000 |
+| `email-to-ftp-server` | Email pipeline only (`/api/email-to-ftp/...`, `x-vault-token`) | 3001 |
+| `fastify-server` | **Legacy** — both pipelines in one process | 3000 |
+
+**Run:** `cd poc-v0.1/<service> && npm run dev` → `tsx watch src/server.ts`
+
+Same `DB_URL` / infra env vars across services; keep `migrations/` identical if edited in more than one folder.
 
 ---
 
@@ -58,6 +65,8 @@ root/
 
 **Run:** `npm run dev` → Port `5174` (assumed second Vite instance)
 
+**Ingestion API URLs:** optional Vite env `VITE_INGESTION_FTP_URL` (default `http://localhost:3000`) and `VITE_INGESTION_EMAIL_URL` (defaults to the FTP URL if unset — works with the legacy monolith). When using split services, set `VITE_INGESTION_EMAIL_URL` to the email microservice (e.g. `http://localhost:3001`).
+
 ---
 
 ## 3. Database Models
@@ -72,7 +81,7 @@ root/
 | `Secret` | `keyName`, `encryptedBlob`, `authTag`, `iv`, `wrappedDek`, `dekIv`, `dekTag`, `serviceId` | Envelope-encrypted secrets |
 | `AuditLog` | `serviceId`, `action`, `target`, `status`, `ipAddress` | Immutable audit trail |
 
-### `poc-v0.1/fastify-server` — Sequelize / PostgreSQL
+### `poc-v0.1` ingestion services — Sequelize / PostgreSQL (same schema, duplicated packages)
 
 | Model | Table | Key Fields | Notes |
 |-------|-------|-----------|-------|
@@ -99,19 +108,31 @@ root/
 
 ---
 
-### `poc-v0.1/fastify-server` — Prefix: `/api`
+### `poc-v0.1/ftp-to-ftp-server` — Prefix: `/api` (FTP routes)
 
 | Method | Route | Auth | Description |
 |--------|-------|------|-------------|
-| GET | `/ping` | None | Health check (returns status, timestamp, node version) |
-| GET | `/health/live` | None | Liveness probe |
-| GET | `/health/ready` | None | Readiness probe (checks Postgres + Redis) |
-| POST | `/link-bucket` | None | Link TPA FTP credentials + initialize MinIO folder hierarchy |
-| POST | `/onboard-org` | None | Alias for `/init-today` (idempotent hierarchy check) |
-| POST | `/init-today` | None | Create today's date-partition folder in MinIO |
-| GET | `/live-feed` | None | Returns 5 most recent ingestion channels |
-| POST | `/webhook` | HMAC-SHA256 (`x-webhook-signature`) | MinIO S3 event ingestion webhook |
-| POST | `/email-to-ftp/email-source` | `x-vault-token` | Register new monitored email inbox |
+| GET | `/ping` | None | Health check |
+| GET | `/health/live` | None | Liveness |
+| GET | `/health/ready` | None | Readiness |
+| POST | `/link-bucket` | None | Link TPA FTP credentials + MinIO hierarchy |
+| POST | `/onboard-org` | None | Alias for `/init-today` |
+| POST | `/init-today` | None | Create today's date-partition folder |
+| GET | `/live-feed` | None | Recent ingestion channels |
+| POST | `/webhook` | HMAC (`x-webhook-signature`) | MinIO S3 webhook |
+
+### `poc-v0.1/email-to-ftp-server` — Prefix: `/api/email-to-ftp`
+
+| Method | Route | Auth | Description |
+|--------|-------|------|-------------|
+| GET | `/ping` | None | Health (same health module) |
+| GET | `/health/live` | None | Liveness |
+| GET | `/health/ready` | None | Readiness |
+| (see OpenAPI) | `/api/email-to-ftp/...` | `x-vault-token` | Email source registration, IMAP poll, etc. |
+
+### `poc-v0.1/fastify-server` (legacy) — combines the above in one process
+
+Same routes as running both microservices behind one `PORT`.
 
 ---
 
@@ -135,7 +156,7 @@ TPA uploads PDF to MinIO (tpa-source-bucket)
 
 ### Email-to-FTP Provisioning Flow (live)
 ```
-POST /email-to-ftp/email-source
+POST /api/email-to-ftp/...
   → Validate x-vault-token header
   → testImapConnection (ImapFlow) → probe live mail server
   → vaultClient.storeSecret({ password, imap_host, imap_port }) → key-vault API
@@ -173,10 +194,13 @@ POST /secrets { serviceId, keyName, value }
 | `src/lib/prisma.ts` | Prisma client singleton (pg pool adapter) |
 | `prisma/schema.prisma` | Source of truth for DB schema |
 
-### `poc-v0.1/fastify-server`
+### `poc-v0.1/fastify-server` (legacy monolith) and microservice copies
+
+The same file layout exists under `ftp-to-ftp-server` and `email-to-ftp-server` (duplicated `src/` per split). Key roles:
+
 | File | Role |
 |------|------|
-| `src/app.ts` | Fastify app factory — registers all plugins + pipelines |
+| `src/app.ts` | Fastify app factory — registers plugins + pipeline(s) for that package |
 | `src/server.ts` | Startup — dependency assertions, listen, graceful shutdown |
 | `src/infra/clients.ts` | MinIO, Redis, Kafka producer singletons |
 | `src/infra/db.ts` | Sequelize instance + model initialization |
@@ -184,10 +208,10 @@ POST /secrets { serviceId, keyName, value }
 | `src/utils/dedupKey.ts` | `buildDedupKey(source, orgId, bucket, filename, etag)` |
 | `src/utils/vault-client.ts` | HTTP client for key-vault API |
 | `src/middleware/webhookAuth.ts` | HMAC signature verifier for MinIO webhooks |
-| `src/repositories/ingestionChannel.repository.ts` | DB access layer for Ingestion_Channel_Master |
-| `src/modules/pipelines/ftp-to-ftp/ingestion/ingestion.service.ts` | **Core pipeline logic** — the full webhook handler |
-| `src/modules/pipelines/email-to-ftp/provisioning/provisioning.service.ts` | Email onboarding with vault + IMAP test |
-| `migrations/` | Sequelize migration files — source of truth for schema changes |
+| `src/repositories/ingestionChannel.repository.ts` | DB access for Ingestion_Channel_Master |
+| `src/modules/pipelines/ftp-to-ftp/ingestion/ingestion.service.ts` | FTP webhook handler |
+| `src/modules/pipelines/email-to-ftp/` | Email provisioning + IMAP ingestion |
+| `migrations/` | Sequelize migrations — keep in sync across the three packages if changed |
 
 ### `ngenclaim-mock`
 | File | Role |
@@ -203,8 +227,8 @@ POST /secrets { serviceId, keyName, value }
 
 ## 7. Coding Conventions
 
-### TypeScript (fastify-server + key-vault)
-- **Module system:** `key-vault` uses ES modules (`"type": "module"`). `fastify-server` uses CommonJS (`"type": "commonjs"`) with TypeScript compiled to dist/.
+### TypeScript (fastify-server, ftp-to-ftp-server, email-to-ftp-server + key-vault)
+- **Module system:** `key-vault` uses ES modules (`"type": "module"`). Ingestion services use CommonJS (`"type": "commonjs"`) with TypeScript compiled to dist/.
 - **Pattern:** MVC — controller handles request/reply, service contains business logic, repository handles DB
 - **Error handling:** `AppError(statusCode, message, code)` → caught by `registerErrorHandler` plugin
 - **Async:** All async functions use `async/await`. Retry wrapper `withRetries(fn, 3)` used in ingestion.
@@ -225,7 +249,7 @@ POST /secrets { serviceId, keyName, value }
 
 ### Database Conventions
 - **Prisma (key-vault):** Schema-first. Run `prisma migrate dev` for changes. Never use `sync({ alter: true })`.
-- **Sequelize (fastify-server):** Migration-first. Run `npm run db:migrate`. Models initialized in `src/infra/db.ts`.
+- **Sequelize (ingestion services):** Migration-first. Run `npm run db:migrate` from **one** of `fastify-server`, `ftp-to-ftp-server`, or `email-to-ftp-server` (identical `migrations/`). Models in `src/infra/db.ts`.
 - **Primary keys:** UUIDs in key-vault (Prisma default). String org IDs in Sequelize (business key = `organisation_id`).
 - **Timestamps:** `createdAt` / `updatedAt` on all models. Sequelize uses `underscored: true` for EmailSource.
 - **Encrypted columns:** Always suffixed `_encrypted` (e.g., `external_password_encrypted`).
@@ -244,33 +268,27 @@ POST /secrets { serviceId, keyName, value }
 | `ALLOWED_ORIGIN` | Prod only | CORS origin whitelist |
 | `SSL_KEY_PATH` / `SSL_CERT_PATH` | Prod only | SSL cert paths |
 
-### `poc-v0.1/fastify-server`
+### `poc-v0.1` ingestion services (`fastify-server`, `ftp-to-ftp-server`, `email-to-ftp-server`)
 | Variable | Required | Notes |
 |----------|----------|-------|
-| `ENCRYPTION_KEY` | YES | AES-256 key for `external_password_encrypted` |
-| `DATABASE_URL` | YES | PostgreSQL |
-| `REDIS_URL` | YES | Redis connection |
-| `MINIO_*` | YES | endpoint, port, useSSL, accessKey, secretKey |
-| `KAFKA_BROKERS` | YES | Comma-separated broker list |
-| `WEBHOOK_SECRET` | No | If unset, HMAC verification is bypassed |
-| `LANDING_BUCKET` | YES | Destination bucket name |
-| `INGESTION_TOPIC` | YES | Kafka topic (default: `claims-ingestion-trace`) |
-| `VAULT_URL` | YES | key-vault base URL for email provisioning |
+| `APP_ENCRYPTION_KEY` | YES | AES-256 key for encrypted columns (see `src/config/index.ts`) |
+| `DB_URL` | YES | PostgreSQL |
+| `REDIS_URL` | YES | Redis |
+| MinIO / Kafka | YES | See `src/config/index.ts` |
+| `WEBHOOK_SECRET` | No | If unset, HMAC verification is bypassed (FTP webhook) |
+| `VAULT_URL` | YES | key-vault base URL (email flows) |
 
 ---
 
 ## 9. Inter-Service Communication
 
 ```
-tpa-react-admin-poc  →  fastify-server (port 3000) — REST
-ngenclaim-mock       →  (standalone UI, no live API calls yet — uses mockData.js)
-fastify-server       →  key-vault (port 8000) — REST via vault-client.ts
-fastify-server       →  MinIO — SDK (minio npm)
-fastify-server       →  Redis — ioredis
-fastify-server       →  Kafka — kafkajs
-fastify-server       →  PostgreSQL — Sequelize
-key-vault            →  PostgreSQL — Prisma
-MinIO                →  fastify-server (webhook POST /api/webhook)
+tpa-react-admin-poc  →  ftp-to-ftp-server (3000) / email-to-ftp-server (3001) — REST
+                       →  fastify-server (3000) — legacy combined API
+ngenclaim-mock       →  (standalone UI — mockData.js)
+ftp/email servers    →  key-vault (8000) — REST via vault-client.ts
+ingestion services   →  MinIO, Redis, Kafka, PostgreSQL
+MinIO                →  ftp-to-ftp-server (POST /api/webhook)
 ```
 
 ---
@@ -279,8 +297,8 @@ MinIO                →  fastify-server (webhook POST /api/webhook)
 
 | Item | Status | Location |
 |------|--------|----------|
-| `email-to-ftp` ingestion service | Scaffold only | `src/modules/pipelines/email-to-ftp/ingestion/ingestion.service.ts` |
-| `email-to-ftp` feed, integration modules | Stubs only | `email-to-ftp/feed/`, `integration/` |
+| Ingestion monolith split | Done | `ftp-to-ftp-server`, `email-to-ftp-server`; legacy `fastify-server` |
+| `email-to-ftp` feed module (separate from integration) | Stub / POC | `email-to-ftp/feed/` per `.cursorrules` |
 | `ngenclaim-mock` live API integration | Uses mockData.js | `src/data/mockData.js` |
 | Encryption key rotation tooling | Planned | See CHANGELOG.md |
 | CI pipeline (typecheck + lint + test + migrate) | Not set up | — |
