@@ -2,6 +2,8 @@ import { EmailSourceModel } from "../../../../infra/db";
 import { AppError } from "../../../../errors/appError";
 import { config } from "../../../../config";
 import { vaultClient } from "../../../../utils/vault-client";
+import { EmailSourceRepository } from "../../../../repositories/emailSource.repository";
+import { getMaxUidForMailbox } from "../integration/imap-mailbox-cursor";
 import { fetchInboxPreview, type PreviewMessagePayload } from "../integration/imap-inbox-preview";
 import { resolveRegisteredImapCredentials } from "../integration/vault-imap-resolve";
 import { testImapConnection } from "../integration/imap-tester";
@@ -14,6 +16,8 @@ import type {
 export interface RegisterEmailSourceResult {
   email: string;
   orgId: string;
+  /** IMAP UID cursor stored at registration (max UID in mailbox when watermark used). */
+  lastProcessedUid: number;
 }
 
 export interface TestEmailSourceResult {
@@ -26,12 +30,35 @@ export interface PreviewInboxResult {
   messages: PreviewMessagePayload[];
 }
 
+export interface EmailSourceImapStatus {
+  active: boolean;
+  detail?: string;
+}
+
+export interface EmailSourceListItem {
+  email: string;
+  serviceId: string;
+  zoneId: string;
+  isActive: boolean;
+  lastProcessedUid: number;
+  createdAt: string;
+  updatedAt: string;
+  imap: EmailSourceImapStatus | null;
+}
+
+export interface ListEmailSourcesResult {
+  orgId: string;
+  sources: EmailSourceListItem[];
+}
+
 export class ProvisioningService {
+  constructor(private readonly emailSourceRepository: EmailSourceRepository) {}
   /**
    * Registers a new email source by:
    * 1. Probing the IMAP credentials against the mail server.
-   * 2. Storing credentials in Key Vault (single source of truth for host/port/password).
-   * 3. Persisting email, org, service id, and is_active in Postgres (no imap/vault row ids).
+   * 2. Optionally reading the current max UID in the poll mailbox (default) so `last_processed_uid` skips existing backlog.
+   * 3. Storing credentials in Key Vault (single source of truth for host/port/password).
+   * 4. Persisting email, org, service id, and is_active in Postgres (no imap/vault row ids).
    *
    * On DB failure after a successful Vault write, attempts to delete the
    * orphan Vault secret to keep state consistent.
@@ -40,7 +67,8 @@ export class ProvisioningService {
     input: RegisterEmailSourceInput,
     vaultToken: string,
   ): Promise<RegisterEmailSourceResult> {
-    const { orgId, serviceId, email, password, imapHost } = input;
+    const { orgId, serviceId, password, imapHost } = input;
+    const email = input.email.trim();
     const imapPort = Number(input.imapPort) || 993;
     const zoneId = (input.zoneId && input.zoneId.trim()) || config.defaultEmailZone;
 
@@ -53,6 +81,22 @@ export class ProvisioningService {
 
     if (!connectionTest.success) {
       throw new AppError(401, `IMAP Connection Failed: ${connectionTest.error}`, "IMAP_AUTH_FAILED");
+    }
+
+    const useMailboxWatermark = input.startFromCurrentMailboxWatermark !== false;
+    let initialLastProcessedUid = 0;
+    if (useMailboxWatermark) {
+      try {
+        initialLastProcessedUid = await getMaxUidForMailbox({
+          host: imapHost,
+          port: imapPort,
+          user: email,
+          pass: password,
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        throw new AppError(502, `Failed to read mailbox UID watermark: ${msg}`, "IMAP_MAILBOX_CURSOR_FAILED");
+      }
     }
 
     const vaultKeyName = `imap:${email}`;
@@ -86,13 +130,14 @@ export class ProvisioningService {
         email_address: email,
         vault_service_id: serviceId,
         zone_id: zoneId,
-        last_processed_uid: 0,
+        last_processed_uid: initialLastProcessedUid,
         is_active: true,
       } as never);
 
       return {
         email: newSource.email_address,
         orgId: newSource.organisation_id,
+        lastProcessedUid: initialLastProcessedUid,
       };
     } catch (dbErr) {
       try {
@@ -106,6 +151,63 @@ export class ProvisioningService {
         "EMAIL_SOURCE_PERSIST_FAILED",
       );
     }
+  }
+
+  /**
+   * Lists registered email sources for an organisation. Optionally runs a live IMAP probe per row
+   * (O(n) network calls — use sparingly).
+   */
+  async listEmailSourcesByOrg(
+    orgId: string,
+    vaultToken: string,
+    options: { includeConnectionStatus: boolean },
+  ): Promise<ListEmailSourcesResult> {
+    const trimmedOrg = orgId.trim();
+    if (!trimmedOrg) {
+      throw new AppError(400, "orgId is required.", "ORG_ID_REQUIRED");
+    }
+
+    const rows = await this.emailSourceRepository.findAllByOrganisationId(trimmedOrg);
+    const sources: EmailSourceListItem[] = [];
+
+    for (const row of rows) {
+      const base = {
+        email: row.email_address,
+        serviceId: row.vault_service_id,
+        zoneId: row.zone_id,
+        isActive: row.is_active,
+        lastProcessedUid: row.last_processed_uid,
+        createdAt: row.createdAt.toISOString(),
+        updatedAt: row.updatedAt.toISOString(),
+      };
+
+      if (!options.includeConnectionStatus) {
+        sources.push({ ...base, imap: null });
+        continue;
+      }
+
+      try {
+        const imapResult = await this.testEmailSourceConnection(
+          { email: row.email_address, serviceId: row.vault_service_id },
+          vaultToken,
+        );
+        sources.push({
+          ...base,
+          imap: {
+            active: imapResult.active,
+            ...(imapResult.detail ? { detail: imapResult.detail } : {}),
+          },
+        });
+      } catch (err) {
+        const msg = err instanceof AppError ? err.message : String(err);
+        sources.push({
+          ...base,
+          imap: { active: false, detail: msg },
+        });
+      }
+    }
+
+    return { orgId: trimmedOrg, sources };
   }
 
   /**

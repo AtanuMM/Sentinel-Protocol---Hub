@@ -9,8 +9,6 @@ export class EmailClaimArtifact extends Model {
   declare imap_mailbox: string;
   declare imap_uidvalidity: string | null;
   declare rfc_message_id: string | null;
-  declare email_subject_text: string;
-  declare email_body_text: string;
   declare matched_keywords: string[];
   declare trace_id: string;
   declare landing_path: string;
@@ -35,8 +33,6 @@ export const initEmailClaimArtifactModel = (sequelize: Sequelize): typeof EmailC
       imap_mailbox: { type: DataTypes.STRING, allowNull: false, defaultValue: "INBOX" },
       imap_uidvalidity: { type: DataTypes.BIGINT, allowNull: true },
       rfc_message_id: { type: DataTypes.TEXT, allowNull: true },
-      email_subject_text: { type: DataTypes.TEXT, allowNull: false, defaultValue: "" },
-      email_body_text: { type: DataTypes.TEXT, allowNull: false },
       matched_keywords: { type: DataTypes.JSONB, allowNull: false },
       trace_id: { type: DataTypes.UUID, allowNull: false, unique: true },
       landing_path: { type: DataTypes.STRING, allowNull: false, unique: true },

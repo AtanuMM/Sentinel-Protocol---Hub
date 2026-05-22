@@ -1,6 +1,7 @@
 import { FastifyReply, FastifyRequest } from "fastify";
 import { AppError } from "../../../../errors/appError";
 import type {
+  ListEmailSourcesQuery,
   PreviewInboxInput,
   RegisterEmailSourceInput,
   TestEmailSourceInput,
@@ -19,6 +20,11 @@ type TestEmailSourceRequest = FastifyRequest<{
 
 type PreviewInboxRequest = FastifyRequest<{
   Body: PreviewInboxInput;
+  Headers: { "x-vault-token": string };
+}>;
+
+type ListEmailSourcesRequest = FastifyRequest<{
+  Querystring: ListEmailSourcesQuery;
   Headers: { "x-vault-token": string };
 }>;
 
@@ -55,6 +61,31 @@ export class ProvisioningController {
         ? `IMAP connection verified for ${emailTrimmed}.`
         : `IMAP connection check failed for ${emailTrimmed}.`,
       ...(result.detail ? { detail: result.detail } : {}),
+    });
+  };
+
+  listEmailSources = async (request: ListEmailSourcesRequest, reply: FastifyReply) => {
+    const vaultToken = request.headers["x-vault-token"];
+    if (!vaultToken) {
+      throw new AppError(401, "Vault token missing from request headers", "VAULT_TOKEN_MISSING");
+    }
+
+    const { orgId, includeConnectionStatus } = request.query;
+    const includeProbe = includeConnectionStatus === "true";
+    const result = await this.service.listEmailSourcesByOrg(orgId, vaultToken, {
+      includeConnectionStatus: includeProbe,
+    });
+    const n = result.sources.length;
+    return reply.code(200).send({
+      success: true,
+      orgId: result.orgId,
+      sources: result.sources,
+      message:
+        n === 0
+          ? `No email sources registered for organisation ${result.orgId}.`
+          : includeProbe
+            ? `Listed ${n} email source(s) with IMAP connection status for ${result.orgId}.`
+            : `Listed ${n} email source(s) for ${result.orgId}.`,
     });
   };
 
