@@ -8,6 +8,8 @@ interface UpsertChannelInput {
   external_password_encrypted: string;
   region: string;
   is_onboarded: boolean;
+  kms_service_id: string;
+  vault_token_encrypted: string;
 }
 
 export class IngestionChannelRepository {

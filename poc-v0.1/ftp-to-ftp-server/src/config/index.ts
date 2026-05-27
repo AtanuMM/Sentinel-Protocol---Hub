@@ -50,7 +50,7 @@ export const config = {
   encryptionKey: required("APP_ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef"),
   vaultUrl: required("VAULT_URL", "http://localhost:8000/api/v1"),
   /** When set, KMS list secrets uses GET {kmsBaseUrl}/api/v1/secrets/{serviceId} (overrides vaultUrl path for listSecretsForService). */
-  kmsBaseUrl: (process.env.KMS_BASE_URL ?? "").trim(),
+  kmsBaseUrl: (process.env.KMS_BASE_URL ?? "http://localhost:8000").trim(),
   pollIntervalMs: Number(process.env.POLL_INTERVAL_MS ?? 300000),
   pollConcurrency: Math.min(Math.max(Number(process.env.POLL_CONCURRENCY ?? 5), 1), 50),
   /** Default zone for email landing paths when not stored per source (POC). */

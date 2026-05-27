@@ -1,6 +1,6 @@
 export const linkBucketBodySchema = {
   type: "object",
-  required: ["orgId", "zone", "username", "password", "bucketName"],
+  required: ["orgId", "zone", "username", "password", "bucketName", "kmsServiceId", "ftpHost"],
   properties: {
     orgId: { type: "string", minLength: 2 },
     zone: { type: "string", minLength: 2 },
@@ -8,6 +8,19 @@ export const linkBucketBodySchema = {
     password: { type: "string", minLength: 1 },
     bucketName: { type: "string", minLength: 3 },
     region: { type: "string" },
+    kmsServiceId: { type: "string", minLength: 1 },
+    ftpHost: { type: "string", minLength: 1 },
+    ftpPort: { type: "number" },
+    secure: { type: "boolean" },
+    provider: { type: "string", enum: ["FTP", "MINIO", "S3", "GCP", "AZURE"] },
+  },
+};
+
+export const linkBucketHeadersSchema = {
+  type: "object",
+  required: ["x-vault-token"],
+  properties: {
+    "x-vault-token": { type: "string", minLength: 1 },
   },
 };
 
