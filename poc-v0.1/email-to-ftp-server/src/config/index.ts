@@ -49,6 +49,8 @@ export const config = {
   webhookSecret: process.env.WEBHOOK_SECRET ?? "",
   encryptionKey: required("APP_ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef"),
   vaultUrl: required("VAULT_URL", "http://localhost:8000/api/v1"),
+  /** When set, KMS list secrets uses GET {kmsBaseUrl}/api/v1/secrets/{serviceId} (overrides vaultUrl path for listSecretsForService). */
+  kmsBaseUrl: (process.env.KMS_BASE_URL ?? "").trim(),
   /** Default zone for email landing paths when not stored per source (POC). */
   defaultEmailZone: process.env.DEFAULT_EMAIL_ZONE ?? "eu-central-1",
   /**

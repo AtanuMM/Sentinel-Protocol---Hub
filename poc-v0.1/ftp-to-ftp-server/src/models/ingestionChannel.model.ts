@@ -8,6 +8,8 @@ export class IngestionChannel extends Model {
   declare external_password_encrypted: string;
   declare region: string;
   declare is_onboarded: boolean;
+  declare kms_service_id: string | null;
+  declare vault_token_encrypted: string | null;
   declare readonly updatedAt: Date;
 }
 
@@ -21,6 +23,8 @@ export const initIngestionChannelModel = (sequelize: Sequelize): typeof Ingestio
       external_password_encrypted: { type: DataTypes.TEXT, allowNull: false },
       region: { type: DataTypes.STRING, allowNull: false },
       is_onboarded: { type: DataTypes.BOOLEAN, defaultValue: false },
+      kms_service_id: { type: DataTypes.STRING, allowNull: true },
+      vault_token_encrypted: { type: DataTypes.TEXT, allowNull: true },
     },
     { sequelize, tableName: "Ingestion_Channel_Master" }
   );

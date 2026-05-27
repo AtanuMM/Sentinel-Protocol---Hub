@@ -33,4 +33,12 @@ export class IngestionChannelRepository {
       order: [["updatedAt", "DESC"]],
     });
   }
+
+  /** Channels eligible for KMS-backed source polling (requires populated KMS + vault token columns). */
+  async findActiveOnboardedForPolling() {
+    const rows = await IngestionChannelModel.findAll({ where: { is_onboarded: true } });
+    return rows.filter(
+      (c) => Boolean(c.kms_service_id?.trim()) && Boolean(c.vault_token_encrypted?.trim()),
+    );
+  }
 }

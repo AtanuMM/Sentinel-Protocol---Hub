@@ -62,7 +62,10 @@ export const vaultClient = {
     vaultToken: string,
   ): Promise<VaultSecretListItem[]> {
     try {
-      const url = `${config.vaultUrl}/secrets/${encodeURIComponent(serviceId)}`;
+      const servicePath = encodeURIComponent(serviceId);
+      const url = config.kmsBaseUrl
+        ? `${config.kmsBaseUrl.replace(/\/+$/, "")}/api/v1/secrets/${servicePath}`
+        : `${config.vaultUrl}/secrets/${servicePath}`;
       const response = await axios.get(url, { headers: buildHeaders(vaultToken) });
       const data = response.data;
       if (!Array.isArray(data)) {
