@@ -1,8 +1,11 @@
 import { listNewFiles, readFromSource, writeToLanding } from '@sentinel/storage-core'
+import type { FileDescriptor } from '@sentinel/storage-core'
 import pLimit from 'p-limit'
 import { config } from '../config'
 import { getConsumer, type PollJobMessage } from '../kafka'
+import { getRedisClient } from '../redis'
 import { decryptText } from '../utils/crypto'
+import { buildDedupKey, type PipelineSource } from '../utils/dedupKey'
 import { vaultClient } from '../utils/vault-client'
 
 const WORKER_GROUP_ID = 'poll-orchestrator-workers'
@@ -51,33 +54,70 @@ async function handlePollJob(job: PollJobMessage): Promise<void> {
 
   console.log(`[poll-worker] ${files.length} files found for orgId ${job.orgId}`)
 
+  const transferFile = async (file: FileDescriptor): Promise<void> => {
+    const stream = await readFromSource({
+      orgId: job.orgId,
+      sourceCredentials,
+      fileName: file.fileName,
+      mimeType: file.mimeType,
+      fileSizeBytes: file.fileSizeBytes,
+      sourceChannel,
+      filePath: file.filePath,
+    })
+
+    await writeToLanding(stream, {
+      orgId: job.orgId,
+      zoneId: file.zoneId,
+      contextFolder: file.claimFolder,
+      fileName: file.fileName,
+      mimeType: file.mimeType,
+      fileSizeBytes: file.fileSizeBytes,
+      sourceChannel,
+    })
+  }
+
+  const redis = getRedisClient()
+  const sourceType: PipelineSource =
+    job.channelType === 'FTP' ? 'ftp' : job.channelType === 'EMAIL' ? 'email' : 'whatsapp'
+
   const limit = pLimit(config.pollConcurrency)
   await Promise.all(
     files.map((file) =>
       limit(async () => {
+        // EMAIL uses last_processed_uid watermark — no file-path dedup needed.
+        if (job.channelType === 'EMAIL') {
+          try {
+            await transferFile(file)
+            console.log(`[poll-worker] ✅ ${file.fileName} uploaded for orgId ${job.orgId}`)
+          } catch (err) {
+            console.error(`[poll-worker] ❌ Failed ${file.fileName} for orgId ${job.orgId}:`, err)
+          }
+          return
+        }
+
+        // Redis dedup for FTP and WHATSAPP.
+        const dedupKey = buildDedupKey(
+          sourceType,
+          job.orgId,
+          file.filePath.split('/')[1] ?? '',
+          file.filePath
+        )
+
+        // Step 1: try to claim this file
+        const claimed = await redis.set(dedupKey, 'processing', 'EX', config.dedupTtlSec, 'NX')
+        if (claimed === null) {
+          console.log(`[poll-worker] Skipping already processed: ${file.fileName}`)
+          return
+        }
+
         try {
-          const stream = await readFromSource({
-            orgId: job.orgId,
-            sourceCredentials,
-            fileName: file.fileName,
-            mimeType: file.mimeType,
-            fileSizeBytes: file.fileSizeBytes,
-            sourceChannel,
-            filePath: file.filePath,
-          })
-
-          await writeToLanding(stream, {
-            orgId: job.orgId,
-            zoneId: file.zoneId,
-            contextFolder: file.claimFolder,
-            fileName: file.fileName,
-            mimeType: file.mimeType,
-            fileSizeBytes: file.fileSizeBytes,
-            sourceChannel,
-          })
-
+          await transferFile(file)
+          // Step 2: mark as processed with long TTL
+          await redis.set(dedupKey, 'processed', 'EX', config.dedupTtlSec)
           console.log(`[poll-worker] ✅ ${file.fileName} uploaded for orgId ${job.orgId}`)
         } catch (err) {
+          // Step 3: release lock on failure so next cycle can retry
+          await redis.del(dedupKey)
           console.error(`[poll-worker] ❌ Failed ${file.fileName} for orgId ${job.orgId}:`, err)
         }
       })

@@ -35,25 +35,38 @@ services:
 
   # 3. FILE TAGGING CACHE (Deduplication Logic)
   # Port 6380 used to avoid conflict with your local Redis
-  redis:
-    image: redis:alpine
-    container_name: sentinel-cache
-    ports:
-      - "6380:6379"
+  # redis:
+  #   image: redis:alpine
+  #   container_name: sentinel-cache
+  #   ports:
+  #     - "6380:6379"
   
+  # redis-insight:
+  #   image: redis/redisinsight:latest
+  #   container_name: sentinel-redis-insight
+  #   ports:
+  #     - "8001:5540"
+  #   environment:
+  #     # This JSON string automatically adds your Redis service to the UI on startup
+  #     - REDISINSIGHT_HOST=0.0.0.0
+  #     - REDISINSIGHT_PORT=5540
+  #     - REDIS_HOSTS=Sentinel-Cache:redis:6379
+  #   restart: always
+  #   depends_on:
+  #     - redis
+
   redis-insight:
     image: redis/redisinsight:latest
     container_name: sentinel-redis-insight
     ports:
       - "8001:5540"
     environment:
-      # This JSON string automatically adds your Redis service to the UI on startup
       - REDISINSIGHT_HOST=0.0.0.0
       - REDISINSIGHT_PORT=5540
-      - REDIS_HOSTS=Sentinel-Cache:redis:6379
+      - REDIS_HOSTS=Sentinel-Cache:host.docker.internal:6379
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     restart: always
-    depends_on:
-      - redis
 
   # 4. KAFKA CLUSTER (KRaft Mode - No ZooKeeper Required)
   # Internal: kafka:29092 | External: localhost:9092
@@ -138,7 +151,7 @@ services:
       - "host.docker.internal:host-gateway"
     depends_on:
       - db
-      - redis
+      # - redis
       - kafka
       - minio
 

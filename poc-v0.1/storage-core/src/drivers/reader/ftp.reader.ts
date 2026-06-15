@@ -23,7 +23,7 @@ function fileDescriptorFromParts(
   filePath: string,
   fileSizeBytes: number,
 ): FileDescriptor | null {
-  if (parts.length < 6 || parts[0] !== 'Health_Claims') return null
+  if (parts.length < 6) return null
   const zoneId = parts[1]
   const claimFolder = parts[4]
   const fileName = parts[parts.length - 1]
@@ -69,7 +69,7 @@ export const ftpReaderDriver: ReaderDriver = {
     }
 
     const client = new Client()
-    const root = '/Health_Claims'
+    const root = '/'
     const out: FileDescriptor[] = []
     try {
       await client.access({ host, port, user, password, secure })

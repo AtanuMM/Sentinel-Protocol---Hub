@@ -1,6 +1,7 @@
 import 'dotenv/config'
 import { sequelize } from './db'
 import { provisionTopics } from './kafka'
+import { connectRedis, disconnectRedis } from './redis'
 import { startScheduler, stopScheduler } from './scheduler/cron'
 import { startWorkerPool, stopWorkerPool } from './workers/pool'
 
@@ -10,6 +11,9 @@ async function main() {
 
   await sequelize.authenticate()
   console.log('[orchestrator] DB connected')
+
+  await connectRedis()
+  console.log('[orchestrator] Redis connected')
 
   await startWorkerPool()
   console.log('[orchestrator] Worker pool started')
@@ -21,6 +25,7 @@ async function main() {
     console.log('[orchestrator] Shutting down...')
     stopScheduler()
     await stopWorkerPool()
+    await disconnectRedis()
     await sequelize.close()
     process.exit(0)
   }

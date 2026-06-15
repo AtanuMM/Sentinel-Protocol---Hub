@@ -8,6 +8,8 @@ export const config = {
   vaultUrl: process.env.VAULT_URL ?? 'http://localhost:8000/api/v1',
   pollIntervalMs: parseInt(process.env.POLL_INTERVAL_MS ?? '300000', 10),
   pollConcurrency: parseInt(process.env.POLL_CONCURRENCY ?? '10', 10),
+  redisUrl: process.env.REDIS_URL ?? 'redis://localhost:6380',
+  dedupTtlSec: parseInt(process.env.DEDUP_TTL_SEC ?? '604800', 10), // 7 days default
   appEncryptionKey: process.env.APP_ENCRYPTION_KEY ?? '',
   encryptionKey: process.env.APP_ENCRYPTION_KEY ?? '',
 }

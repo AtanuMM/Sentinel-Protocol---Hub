@@ -36,7 +36,7 @@ function fileDescriptorFromObjectKey(
   size: number,
 ): FileDescriptor | null {
   const parts = key.split('/').filter(Boolean)
-  if (parts.length < 6 || parts[0] !== 'Health_Claims') return null
+  if (parts.length < 6) return null
   const zoneId = parts[1]
   const claimFolder = parts[4]
   const fileName = parts[parts.length - 1]
@@ -74,7 +74,7 @@ export const minioReaderDriver: ReaderDriver = {
       secretKey,
     })
 
-    const objects = await listObjectsRecursive(client, bucket, 'Health_Claims/')
+    const objects = await listObjectsRecursive(client, bucket, '')
     const out: FileDescriptor[] = []
     for (const obj of objects) {
       if (!obj.name || obj.name.endsWith('/')) continue

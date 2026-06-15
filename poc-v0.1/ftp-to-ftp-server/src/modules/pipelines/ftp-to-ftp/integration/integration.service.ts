@@ -19,6 +19,56 @@ interface LinkBucketInput {
   provider?: string;
 }
 
+function buildCredentialValue(input: LinkBucketInput): Record<string, unknown> {
+  const provider = (input.provider ?? "FTP").toUpperCase();
+
+  switch (provider) {
+    case "MINIO":
+      return {
+        provider,
+        endpoint: `http://${input.ftpHost}:${input.ftpPort ?? 9000}`,
+        access_key: input.username,
+        secret_key: input.password,
+        bucket: input.bucketName,
+        secure: input.secure ?? false,
+      };
+    case "S3":
+      return {
+        provider,
+        region: input.region ?? "ap-south-1",
+        access_key: input.username,
+        secret_key: input.password,
+        bucket: input.bucketName,
+      };
+    case "GCP":
+      return {
+        provider,
+        project_id: input.ftpHost,
+        access_key: input.username,
+        secret_key: input.password,
+        bucket: input.bucketName,
+      };
+    case "AZURE":
+      return {
+        provider,
+        account_name: input.username,
+        account_key: input.password,
+        container: input.bucketName,
+      };
+    case "FTP":
+    default:
+      return {
+        provider: "FTP",
+        host: input.ftpHost,
+        port: input.ftpPort ?? 21,
+        user: input.username,
+        password: input.password,
+        secure: input.secure ?? false,
+        bucket: input.bucketName,
+      };
+  }
+}
+
 export class IntegrationService {
   constructor(private readonly repository: IngestionChannelRepository) {}
 
@@ -43,15 +93,7 @@ export class IntegrationService {
     );
 
     const keyName = `ftp:${input.orgId}`;
-    const credentialValue = {
-      provider: input.provider ?? "FTP",
-      host: input.ftpHost,
-      port: input.ftpPort ?? 21,
-      user: input.username,
-      password: input.password,
-      secure: input.secure ?? false,
-      bucket: input.bucketName,
-    };
+    const credentialValue = buildCredentialValue(input);
     await vaultClient.storeSecret(
       {
         serviceId: input.kmsServiceId,
