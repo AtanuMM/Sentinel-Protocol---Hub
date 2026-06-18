@@ -28,6 +28,18 @@ export interface FileDescriptor {
   filePath: string
   fileSizeBytes: number
   mimeType: string
+  // Email-specific (optional — only populated by email.reader.ts)
+  emailMeta?: {
+    imapUid: number
+    rfcMessageId: string | null
+    matchedKeywords: string[]
+    isTranscript: boolean
+    pdfSha256?: string
+    // The actual file bytes are attached here because email attachments
+    // are downloaded during listNewFiles (IMAP requires fetch-then-read,
+    // unlike FTP/MinIO where listing and reading are separate calls)
+    bufferedContent: Buffer
+  }
 }
 
 export interface TransferResult {
@@ -52,7 +64,21 @@ export interface KafkaEventPayload {
   }
 }
 
-/** Reader driver: lists and reads from TPA source */
+/**
+ * Reader driver: lists and reads from TPA source.
+ *
+ * Credentials shapes (the raw KMS secret value object, keyed by provider):
+ * - FTP:   { provider: 'FTP', host, port, user, password, secure, bucket }
+ * - MINIO: { provider: 'MINIO', endpoint, access_key, secret_key, bucket }
+ * - EMAIL: { provider: 'EMAIL', email, password, imap_host, imap_port }
+ *
+ * For the EMAIL provider, `readFile` is NOT the content-retrieval path: email
+ * attachments and transcripts are downloaded during `listNewFiles` and attached to
+ * each FileDescriptor.emailMeta.bufferedContent. Callers should wrap that buffer in a
+ * stream rather than calling `readFile`, which avoids a second IMAP round-trip and
+ * works around the fact that IMAP UIDs are not stable filePath identifiers once the
+ * mailbox lock is released.
+ */
 export interface ReaderDriver {
   listNewFiles(orgId: string, credentials: Record<string, any>): Promise<FileDescriptor[]>
   readFile(credentials: Record<string, any>, filePath: string): Promise<Readable>

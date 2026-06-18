@@ -120,6 +120,7 @@ services:
         -Dgreenmail.setup.test.imaps
         -Dgreenmail.hostname=0.0.0.0
         -Dgreenmail.users=alice:secret123@hitpa.local,claims:claims-pass@hitpa.local
+        -Dgreenmail.users.login=email
 
   # 8. ROUNDCUBE (Browser UI for the GreenMail mailboxes)
   # Access at: http://localhost:8888

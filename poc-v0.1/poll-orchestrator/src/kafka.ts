@@ -9,6 +9,8 @@ export interface PollJobMessage {
   vaultToken: string
   channelType: 'FTP' | 'EMAIL' | 'WHATSAPP'
   scheduledAt: string
+  // EMAIL only — needed because Email_Source_Master is keyed by email_address, not kms_service_id
+  emailAddress?: string
 }
 
 const REQUIRED_TOPICS = [

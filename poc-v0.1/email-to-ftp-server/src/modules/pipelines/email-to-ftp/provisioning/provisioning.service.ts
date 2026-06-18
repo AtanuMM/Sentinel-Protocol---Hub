@@ -1,6 +1,7 @@
 import { EmailSourceModel } from "../../../../infra/db";
 import { AppError } from "../../../../errors/appError";
 import { config } from "../../../../config";
+import { encryptText } from "../../../../utils/crypto";
 import { vaultClient } from "../../../../utils/vault-client";
 import { EmailSourceRepository } from "../../../../repositories/emailSource.repository";
 import { getMaxUidForMailbox } from "../integration/imap-mailbox-cursor";
@@ -132,6 +133,7 @@ export class ProvisioningService {
         zone_id: zoneId,
         last_processed_uid: initialLastProcessedUid,
         is_active: true,
+        vault_token_encrypted: encryptText(vaultToken),
       } as never);
 
       return {
@@ -144,6 +146,19 @@ export class ProvisioningService {
         await vaultClient.deleteSecret(secretId, vaultToken);
       } catch {
         // Swallow rollback errors; the DB error is the primary failure.
+      }
+      const err = dbErr as Error & { errors?: Array<{ path?: string }> };
+      if (
+        dbErr instanceof Error &&
+        err.name === "SequelizeUniqueConstraintError" &&
+        Array.isArray(err.errors) &&
+        err.errors.some((e) => e.path === "email_address")
+      ) {
+        throw new AppError(
+          409,
+          `Email source ${email} is already registered.`,
+          "EMAIL_SOURCE_ALREADY_EXISTS",
+        );
       }
       throw new AppError(
         500,

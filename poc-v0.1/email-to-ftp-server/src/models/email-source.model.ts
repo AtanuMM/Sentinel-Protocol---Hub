@@ -7,6 +7,7 @@ export class EmailSource extends Model {
   declare zone_id: string;
   declare last_processed_uid: number;
   declare is_active: boolean;
+  declare vault_token_encrypted: string | null;
   declare readonly updatedAt: Date;
   declare readonly createdAt: Date;
 }
@@ -39,6 +40,10 @@ export const initEmailSourceModel = (sequelize: Sequelize): typeof EmailSource =
       is_active: {
         type: DataTypes.BOOLEAN,
         defaultValue: true,
+      },
+      vault_token_encrypted: {
+        type: DataTypes.TEXT,
+        allowNull: true,
       },
     },
     {
