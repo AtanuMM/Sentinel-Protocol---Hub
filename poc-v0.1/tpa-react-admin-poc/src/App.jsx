@@ -1,5 +1,11 @@
 import React, { useEffect, useState } from 'react';
 
+/** Split microservices: set `VITE_INGESTION_EMAIL_URL` (e.g. http://localhost:3001). Monolith: omit both (defaults to :3000). */
+const ingestionFtpBase = (import.meta.env.VITE_INGESTION_FTP_URL ?? 'http://localhost:3000').replace(/\/$/, '');
+const ingestionEmailBase = (
+  import.meta.env.VITE_INGESTION_EMAIL_URL ?? import.meta.env.VITE_INGESTION_FTP_URL ?? 'http://localhost:3000'
+).replace(/\/$/, '');
+
 function App() {
   const [status, setStatus] = useState({ msg: 'System Standby', type: 'info' });
   const [loading, setLoading] = useState(false);
@@ -96,7 +102,7 @@ function App() {
   const checkServerLink = async () => {
     setServerStatus('checking');
     try {
-      const res = await fetch('http://localhost:3000/api/ping');
+      const res = await fetch(`${ingestionFtpBase}/api/ping`);
       const data = await res.json();
       if (data.status === 'online') {
         setServerStatus('online');
@@ -149,7 +155,7 @@ function App() {
     setStatus({ msg: 'Syncing External Credentials...', type: 'info' });
 
     try {
-      const res = await fetch(`http://localhost:3000/api/link-bucket`, {
+      const res = await fetch(`${ingestionFtpBase}/api/link-bucket`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ orgId, zone, ...formData })
@@ -256,7 +262,7 @@ function App() {
     setPollModalOpen(true);
     setPollLoading(true);
     try {
-      const res = await fetch('http://localhost:3000/api/email-to-ftp/email-source/poll-claims', {
+      const res = await fetch(`${ingestionEmailBase}/api/email-to-ftp/email-source/poll-claims`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -291,7 +297,7 @@ function App() {
     setLoading(true);
     setStatus({ msg: startMsg, type: 'info' });
     try {
-      const res = await fetch(`http://localhost:3000/api/${endpoint}`, {
+      const res = await fetch(`${ingestionFtpBase}/api/${endpoint}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ orgId, zone })
@@ -317,7 +323,7 @@ function App() {
     
     const fetchFeed = async () => {
       try {
-        const res = await fetch('http://localhost:3000/api/live-feed', { 
+        const res = await fetch(`${ingestionFtpBase}/api/live-feed`, { 
           signal: controller.signal 
         });
         
@@ -366,7 +372,7 @@ function App() {
       setEmailSourcesLoading(true);
       setEmailSourcesError(null);
       try {
-        const url = `http://localhost:3000/api/email-to-ftp/email-sources?orgId=${encodeURIComponent(orgId)}&includeConnectionStatus=true`;
+        const url = `${ingestionEmailBase}/api/email-to-ftp/email-sources?orgId=${encodeURIComponent(orgId)}&includeConnectionStatus=true`;
         const res = await fetch(url, {
           signal: controller.signal,
           headers: { 'x-vault-token': apiKey },
@@ -477,7 +483,7 @@ function App() {
         throw new Error('Missing required fields: email/login, password, and IMAP host.');
       }
       const imapPort = Number(emailSourceForm.imapPort) || 993;
-      const res = await fetch('http://localhost:3000/api/email-to-ftp/email-source', {
+      const res = await fetch(`${ingestionEmailBase}/api/email-to-ftp/email-source`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

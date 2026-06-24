@@ -1,0 +1,12 @@
+services:
+  api-gateway:
+    build: .
+    container_name: api-gateway
+    ports:
+      - "5000:5000"
+    networks:
+      - gateway-network
+
+networks:
+  gateway-network:
+    driver: bridge

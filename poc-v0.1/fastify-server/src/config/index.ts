@@ -2,6 +2,19 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
+/** HTTP listen port from `PORT` in `.env` / process env (1–65535). */
+function parsePort(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (raw === undefined || String(raw).trim() === "") {
+    return fallback;
+  }
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1 || n > 65535) {
+    throw new Error(`Invalid ${name}: expected integer 1-65535, got ${JSON.stringify(raw)}`);
+  }
+  return n;
+}
+
 const required = (name: string, fallback?: string): string => {
   const value = process.env[name] ?? fallback;
   if (!value) {
@@ -19,7 +32,7 @@ export const config = {
   enableSwaggerUi:
     process.env.ENABLE_SWAGGER_UI === "true" ||
     (process.env.NODE_ENV !== "production" && process.env.ENABLE_SWAGGER_UI !== "false"),
-  port: Number(process.env.PORT ?? 3000),
+  port: parsePort("PORT", 3000),
   host: process.env.HOST ?? "0.0.0.0",
   dbUrl: required("DB_URL", "postgres://postgres:postgres123@localhost:5432/sentinel_mdm"),
   redisUrl: required("REDIS_URL", "redis://localhost:6380"),

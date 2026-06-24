@@ -6,6 +6,7 @@ export class HealthController {
   ping(_request: FastifyRequest, reply: FastifyReply) {
     return reply.send({
       status: "online",
+      service: "fastify-server",
       timestamp: new Date().toISOString(),
       node_version: process.version,
     });

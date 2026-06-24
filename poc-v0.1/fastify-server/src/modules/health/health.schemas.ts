@@ -1,8 +1,9 @@
 export const pingResponseSchema = {
   type: "object",
-  required: ["status", "timestamp", "node_version"],
+  required: ["status", "service", "timestamp", "node_version"],
   properties: {
     status: { type: "string" },
+    service: { type: "string", description: "Ingestion process name (legacy monolith hosts both pipelines)." },
     timestamp: { type: "string" },
     node_version: { type: "string" },
   },

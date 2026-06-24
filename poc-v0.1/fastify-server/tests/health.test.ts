@@ -14,6 +14,7 @@ describe("health routes", () => {
     expect(response.statusCode).toBe(200);
     const body = response.json();
     expect(body.status).toBe("online");
+    expect(body.service).toBe("fastify-server");
   });
 
   afterAll(async () => {

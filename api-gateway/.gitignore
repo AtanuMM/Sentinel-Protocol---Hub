@@ -1,0 +1,38 @@
+# OS and editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+.codex
+.codex/
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Logs and runtime files
+*.log
+*.out
+*.err
+*.pid
+*.pid.lock
+logs/
+
+# Dependency and build directories
+node_modules/
+dist/
+build/
+coverage/
+.cache/
+.tmp/
+tmp/
+
+# Docker and local overrides
+docker-compose.override.yml
+
+# Archive files
+*.zip
+*.tar
+*.gz
+*.tgz
