@@ -53,6 +53,7 @@ export interface KafkaEventPayload {
   eventId: string
   timestamp: string
   orgId: string
+  zoneId: string
   sourceChannel: string
   payload: {
     fileName: string
