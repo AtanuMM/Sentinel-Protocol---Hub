@@ -6,6 +6,7 @@ export class EmailSource extends Model {
   declare vault_service_id: string;
   declare zone_id: string;
   declare last_processed_uid: number;
+  declare imap_uidvalidity: string | null;
   declare is_active: boolean;
   declare vault_token_encrypted: string | null;
   declare readonly updatedAt: Date;
@@ -36,6 +37,10 @@ export const initEmailSourceModel = (sequelize: Sequelize): typeof EmailSource =
         type: DataTypes.INTEGER,
         allowNull: false,
         defaultValue: 0,
+      },
+      imap_uidvalidity: {
+        type: DataTypes.TEXT,
+        allowNull: true,
       },
       is_active: {
         type: DataTypes.BOOLEAN,

@@ -49,6 +49,10 @@ export const emailReaderDriver: ReaderDriver = {
     const lastProcessedUid = Number(
       credentials.lastProcessedUid ?? credentials.last_processed_uid ?? 0,
     )
+    const lastUidValidity =
+      typeof credentials.lastUidValidity === 'string' && credentials.lastUidValidity.trim() !== ''
+        ? credentials.lastUidValidity.trim()
+        : null
     const keywords: string[] = Array.isArray(credentials.claimKeywords)
       ? credentials.claimKeywords
       : DEFAULT_CLAIM_KEYWORDS
@@ -76,8 +80,15 @@ export const emailReaderDriver: ReaderDriver = {
 
         const searchResult = await client.search({ all: true }, { uid: true })
         const allUids = Array.isArray(searchResult) ? searchResult : []
+        // UIDs are only valid within a UIDVALIDITY generation (RFC 3501). If the observed UIDVALIDITY
+        // differs from the one stored at the last poll, the UID space was reset (mailbox recreated,
+        // GreenMail restart, etc.) and the stored cursor is meaningless — resync from 0. We only reset
+        // on a real UIDVALIDITY change, never by guessing from inbox size (which mis-fires on deletes).
+        const uidValidityChanged =
+          lastUidValidity !== null && uidValidity !== null && uidValidity !== lastUidValidity
+        const effectiveLastProcessedUid = uidValidityChanged ? 0 : lastProcessedUid
         const newUids = allUids
-          .filter((u) => u > lastProcessedUid)
+          .filter((u) => u > effectiveLastProcessedUid)
           .sort((a, b) => a - b)
           .slice(0, cap)
 
@@ -169,6 +180,7 @@ export const emailReaderDriver: ReaderDriver = {
             mimeType: 'application/pdf',
             emailMeta: {
               imapUid: uid,
+              uidValidity,
               rfcMessageId,
               matchedKeywords: matchedKw,
               isTranscript: true,
@@ -203,6 +215,7 @@ export const emailReaderDriver: ReaderDriver = {
               mimeType: pdf.mimeType || 'application/pdf',
               emailMeta: {
                 imapUid: uid,
+                uidValidity,
                 rfcMessageId,
                 matchedKeywords: matchedKw,
                 isTranscript: false,

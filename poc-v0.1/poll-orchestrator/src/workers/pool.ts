@@ -161,6 +161,7 @@ async function handleEmailJob(job: PollJobMessage, secrets: VaultSecretListItem[
     ...(picked.value as Record<string, unknown>),
     provider: 'EMAIL',
     lastProcessedUid: row.last_processed_uid,
+    lastUidValidity: row.imap_uidvalidity,
     zoneId: row.zone_id,
   }
 
@@ -216,9 +217,31 @@ async function handleEmailJob(job: PollJobMessage, secrets: VaultSecretListItem[
   // in this batch after attempting all writes. (Part 1's reader only returns matched UIDs, so the best
   // available high-water mark is max(emailMeta.imapUid) across the returned descriptors.)
   const maxUid = descriptors.reduce((acc, d) => Math.max(acc, d.emailMeta?.imapUid ?? 0), 0)
-  if (maxUid > row.last_processed_uid) {
-    await EmailSource.update({ last_processed_uid: maxUid }, { where: { email_address: email } })
-    console.log(`[poll-worker] Advanced last_processed_uid to ${maxUid} for ${email}`)
+  const observedUidValidity =
+    descriptors.find((d) => d.emailMeta?.uidValidity != null)?.emailMeta?.uidValidity ?? null
+
+  // Persist the UIDVALIDITY generation alongside the cursor. When UIDVALIDITY changed (mailbox reset),
+  // the reader resynced from 0, so maxUid may be LOWER than the stored cursor — we must adopt it as the
+  // new generation's watermark, otherwise the same batch reprocesses every cycle. When UIDVALIDITY is
+  // unchanged, advance the cursor only forward (standard high-water-mark semantics).
+  const updates: { last_processed_uid?: number; imap_uidvalidity?: string } = {}
+  const uidValidityChanged =
+    observedUidValidity !== null && observedUidValidity !== row.imap_uidvalidity
+  if (uidValidityChanged) {
+    updates.imap_uidvalidity = observedUidValidity
+    if (maxUid > 0) updates.last_processed_uid = maxUid
+  } else {
+    if (maxUid > row.last_processed_uid) updates.last_processed_uid = maxUid
+    if (observedUidValidity !== null && row.imap_uidvalidity === null) {
+      updates.imap_uidvalidity = observedUidValidity
+    }
+  }
+
+  if (Object.keys(updates).length > 0) {
+    await EmailSource.update(updates, { where: { email_address: email } })
+    console.log(
+      `[poll-worker] Persisted cursor for ${email}: ${JSON.stringify(updates)}`,
+    )
   }
 }
 

@@ -31,6 +31,8 @@ export interface FileDescriptor {
   // Email-specific (optional — only populated by email.reader.ts)
   emailMeta?: {
     imapUid: number
+    /** Mailbox UIDVALIDITY observed during this scan; UIDs are only meaningful within this value (RFC 3501). */
+    uidValidity: string | null
     rfcMessageId: string | null
     matchedKeywords: string[]
     isTranscript: boolean
