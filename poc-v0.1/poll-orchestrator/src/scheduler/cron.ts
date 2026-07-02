@@ -1,18 +1,14 @@
 import { config } from '../config'
-import { publishPollJob, type PollJobMessage } from '../kafka'
-import { IngestionChannel } from '../models/channel.model'
-import { EmailSource } from '../models/email-source.model'
+import { publishPollJob, type PollJobChannelType, type PollJobMessage } from '../kafka'
+import { IngestionChannelRepository } from '../repositories/ingestionChannel.repository'
+
+const ingestionChannelRepository = new IngestionChannelRepository()
 
 let intervalId: ReturnType<typeof setInterval> | undefined
 
-function detectChannelType(_kmsServiceId: string): PollJobMessage['channelType'] {
-  // Future: read from a dedicated channel_type column once migrated.
-  return 'FTP'
-}
-
 async function runCycle(): Promise<void> {
   try {
-    const channels = await IngestionChannel.findActiveForPolling()
+    const channels = await ingestionChannelRepository.findActiveObjectStorageChannelsForPolling()
     let published = 0
 
     for (const channel of channels) {
@@ -20,29 +16,25 @@ async function runCycle(): Promise<void> {
       const message: PollJobMessage = {
         credId: `${channel.organisation_id}:${kmsServiceId}`,
         orgId: channel.organisation_id,
-        zoneId: channel.region,
+        insuranceCompanyCode: channel.insurance_company_code,
+        region: channel.region ?? 'eu-central-1',
         kmsServiceId,
         vaultToken: channel.vault_token_encrypted!,
-        channelType: detectChannelType(kmsServiceId),
+        channelType: channel.channel_type as PollJobChannelType,
         scheduledAt: new Date().toISOString(),
       }
       await publishPollJob(message)
       published++
     }
 
-    const emailSources = await EmailSource.findActiveForPolling()
+    const emailChannels = await ingestionChannelRepository.findActiveEmailChannelsForPolling()
     let emailPublished = 0
 
-    for (const source of emailSources) {
-      // Carry the encrypted token, exactly like the FTP branch above (channel.vault_token_encrypted).
-      // The worker (workers/pool.ts) decrypts job.vaultToken via decryptText for all channel types,
-      // so the message must hold ciphertext — decrypting here would double-decrypt and fail.
+    for (const source of emailChannels) {
       const vaultTokenEncrypted = source.vault_token_encrypted
       if (!vaultTokenEncrypted) {
-        // Legacy row registered before vault_token_encrypted existed. Skip just this source and
-        // log how to remediate (one-off backfill), rather than failing the whole cycle.
         console.warn(
-          `[scheduler] Email source ${source.email_address} has no vault_token_encrypted; skipping. ` +
+          `[scheduler] Email channel ${source.email_address} has no vault_token_encrypted; skipping. ` +
             'Backfill it with scripts/backfill-email-vault-token.',
         )
         continue
@@ -51,12 +43,13 @@ async function runCycle(): Promise<void> {
       const message: PollJobMessage = {
         credId: `email:${source.email_address}`,
         orgId: source.organisation_id,
-        zoneId: source.zone_id,
-        kmsServiceId: source.vault_service_id,
+        insuranceCompanyCode: source.insurance_company_code,
+        region: source.region ?? 'eu-central-1',
+        kmsServiceId: source.kms_service_id!,
         vaultToken: vaultTokenEncrypted,
         channelType: 'EMAIL',
         scheduledAt: new Date().toISOString(),
-        emailAddress: source.email_address,
+        emailAddress: source.email_address ?? undefined,
       }
       await publishPollJob(message)
       emailPublished++

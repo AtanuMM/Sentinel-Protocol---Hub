@@ -5,6 +5,8 @@ type LinkBucketRequest = FastifyRequest<{
   Headers: { "x-vault-token": string };
   Body: {
     orgId: string;
+    insurance_company_code: string;
+    configuration_strategy?: "DEDICATED" | "SHARED";
     zone: string;
     username: string;
     password: string;

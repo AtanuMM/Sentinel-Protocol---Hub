@@ -1,6 +1,7 @@
 import { FastifyInstance } from "fastify";
 import { openApiTags } from "../../../../openapi/tags";
 import { EmailClaimArtifactRepository } from "../../../../repositories/emailClaimArtifact.repository";
+import { IngestionChannelRepository } from "../../../../repositories/ingestionChannel.repository";
 import { EmailIngestionController } from "./ingestion.controller";
 import { EmailIngestionService } from "./ingestion.service";
 import { pollClaimsBodySchema, pollClaimsResponseSchema } from "./ingestion.schemas";
@@ -8,7 +9,7 @@ import { registerEmailSourceHeadersSchema } from "../provisioning/provisioning.s
 
 export const registerEmailIngestionRoutes = async (app: FastifyInstance): Promise<void> => {
   const controller = new EmailIngestionController(
-    new EmailIngestionService(new EmailClaimArtifactRepository()),
+    new EmailIngestionService(new EmailClaimArtifactRepository(), new IngestionChannelRepository()),
   );
 
   app.get("/email-source/poll-claims", async (_request, reply) =>

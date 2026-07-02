@@ -6,6 +6,8 @@ import { config } from "../../../../config";
 
 interface LinkBucketInput {
   orgId: string;
+  insurance_company_code: string;
+  configuration_strategy?: "DEDICATED" | "SHARED";
   zone: string;
   username: string;
   password: string;
@@ -73,26 +75,48 @@ export class IntegrationService {
   constructor(private readonly repository: IngestionChannelRepository) {}
 
   async linkBucket(input: LinkBucketInput): Promise<{ message: string; is_onboarded: boolean }> {
-    const prefix = `${input.orgId}/${input.zone}/`;
+    const provider = (input.provider ?? "FTP").toUpperCase();
+    const prefix = `${input.orgId}/${input.insurance_company_code}/`;
     const rootMarker = `${prefix}.sentinel_root`;
 
-    const tpaClient = new Minio.Client({
-      endPoint: config.minioEndpoint,
-      port: config.minioPort,
-      useSSL: config.minioUseSSL,
-      accessKey: input.username,
-      secretKey: input.password,
-    });
+    if (provider === "MINIO") {
+      const tpaClient = new Minio.Client({
+        endPoint: config.minioEndpoint,
+        port: config.minioPort,
+        useSSL: config.minioUseSSL,
+        accessKey: input.username,
+        secretKey: input.password,
+      });
 
-    await tpaClient.putObject(
-      input.bucketName,
-      rootMarker,
-      Buffer.from("HIERARCHY_INITIALIZED"),
-      undefined,
-      { "content-type": "text/plain" },
-    );
+      await tpaClient.putObject(
+        input.bucketName,
+        rootMarker,
+        Buffer.from("HIERARCHY_INITIALIZED"),
+        undefined,
+        { "content-type": "text/plain" },
+      );
+    }
 
-    const keyName = `ftp:${input.orgId}`;
+    let keyName: string;
+    switch (provider) {
+      case "MINIO":
+        keyName = `ftp:${input.orgId}`;
+        break;
+      case "S3":
+        keyName = `s3:${input.orgId}`;
+        break;
+      case "GCP":
+        keyName = `gcp:${input.orgId}`;
+        break;
+      case "AZURE":
+        keyName = `azure:${input.orgId}`;
+        break;
+      case "SFTP":
+        keyName = `sftp:${input.orgId}`;
+        break;
+      default:
+        keyName = `ftp:${input.orgId}`;
+    }
     const credentialValue = buildCredentialValue(input);
     await vaultClient.storeSecret(
       {
@@ -105,6 +129,9 @@ export class IntegrationService {
 
     await this.repository.upsert({
       organisation_id: input.orgId,
+      insurance_company_code: input.insurance_company_code,
+      channel_type: provider,
+      configuration_strategy: input.configuration_strategy ?? "DEDICATED",
       source_prefix: prefix,
       source_bucket: input.bucketName,
       external_username: input.username,

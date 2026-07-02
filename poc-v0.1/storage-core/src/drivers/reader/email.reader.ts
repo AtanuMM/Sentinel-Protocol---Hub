@@ -30,6 +30,14 @@ function requireString(c: Record<string, any>, key: string): string {
   return v.trim()
 }
 
+function requireInsuranceCompanyCode(c: Record<string, any>): string {
+  const raw = c.insuranceCompanyCode ?? c.insurance_company_code
+  if (typeof raw !== 'string' || raw.trim() === '') {
+    throw new Error('Email reader sourceCredentials.insuranceCompanyCode is missing or empty.')
+  }
+  return raw.trim()
+}
+
 function resolvePort(c: Record<string, any>): number {
   const raw = c.imap_port
   const port = typeof raw === 'number' ? raw : parseInt(String(raw), 10)
@@ -56,10 +64,7 @@ export const emailReaderDriver: ReaderDriver = {
     const keywords: string[] = Array.isArray(credentials.claimKeywords)
       ? credentials.claimKeywords
       : DEFAULT_CLAIM_KEYWORDS
-    const zoneId =
-      typeof credentials.zoneId === 'string' && credentials.zoneId.trim() !== ''
-        ? credentials.zoneId.trim()
-        : 'default'
+    const insuranceCompanyCode = requireInsuranceCompanyCode(credentials)
     const bodyStoreMax = Number(credentials.bodyStoreMaxChars ?? DEFAULT_BODY_STORE_MAX_CHARS)
     const requestedMax = Number(credentials.pollMaxMessages ?? DEFAULT_POLL_MAX_MESSAGES)
     const cap = Math.min(Math.max(requestedMax, 1), DEFAULT_POLL_MAX_MESSAGES)
@@ -172,7 +177,7 @@ export const emailReaderDriver: ReaderDriver = {
 
           descriptors.push({
             orgId,
-            zoneId,
+            insuranceCompanyCode,
             claimFolder,
             fileName: EMAIL_TRANSCRIPT_OBJECT,
             filePath: `email://${email}/imap/${mailboxPath}/uid/${uid}/${EMAIL_TRANSCRIPT_OBJECT}`,
@@ -207,7 +212,7 @@ export const emailReaderDriver: ReaderDriver = {
 
             descriptors.push({
               orgId,
-              zoneId,
+              insuranceCompanyCode,
               claimFolder,
               fileName: safeAttachmentName,
               filePath: `email://${email}/imap/${mailboxPath}/uid/${uid}/${pdf.filename}`,

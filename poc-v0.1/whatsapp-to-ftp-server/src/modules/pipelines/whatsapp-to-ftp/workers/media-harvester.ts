@@ -4,6 +4,7 @@ import { Consumer, Kafka } from "kafkajs";
 import { Readable } from "stream";
 import { config } from "../../../../config";
 import { decryptText } from "../../../../utils/crypto";
+import { findChannelByPhoneNumber } from "../../../../repositories/whatsappChannel.repository";
 import type { WhatsappRawEvent } from "../types/webhook";
 import { buildWhatsappTranscriptPdfBuffer } from "./transcript-gen";
 
@@ -55,8 +56,55 @@ function deriveContextFolder(displayPhoneNumber: string, originalFilename: strin
   return `${displayPhoneNumber}_${claimStem}`;
 }
 
+function tryPlainVaultToken(vaultToken: string): string | null {
+  const parts = vaultToken.split(":");
+  const looksEncrypted =
+    parts.length === 3 &&
+    parts[0].length > 0 &&
+    parts[1].length > 0 &&
+    parts[2].length > 0 &&
+    /^[0-9a-f]+$/i.test(parts[0]) &&
+    /^[0-9a-f]+$/i.test(parts[1]) &&
+    /^[0-9a-f]+$/i.test(parts[2]);
+
+  if (looksEncrypted) {
+    return decryptText(vaultToken);
+  }
+  if (vaultToken.startsWith("sv_live_")) {
+    return vaultToken;
+  }
+  return null;
+}
+
+async function resolvePlainVaultToken(event: WhatsappRawEvent): Promise<string | null> {
+  const channel = await findChannelByPhoneNumber(event.displayPhoneNumber);
+  const candidates: string[] = [];
+  if (channel?.vault_token_encrypted) {
+    candidates.push(channel.vault_token_encrypted);
+  }
+  if (event.vaultToken && !candidates.includes(event.vaultToken)) {
+    candidates.push(event.vaultToken);
+  }
+
+  for (let i = 0; i < candidates.length; i++) {
+    const plain = tryPlainVaultToken(candidates[i]);
+    if (plain) {
+      return plain;
+    }
+  }
+
+  console.warn(
+    `[media-harvester] Skipping messageId=${event.messageId}: vault_token_encrypted is not APP-encrypted (iv:tag:ciphertext) or sv_live_. ` +
+      `Update whatsapp_channels for ${event.displayPhoneNumber} with encryptText(sv_live_...) from key-vault provisioning.`,
+  );
+  return null;
+}
+
 async function resolveAccessToken(event: WhatsappRawEvent): Promise<string | null> {
-  const plainVaultToken = decryptText(event.vaultToken);
+  const plainVaultToken = await resolvePlainVaultToken(event);
+  if (!plainVaultToken) {
+    return null;
+  }
   const servicePath = encodeURIComponent(event.kmsServiceId);
   const response = await axios.get<KmsSecretListItem[]>(
     `${config.vaultUrl}/secrets/${servicePath}`,
@@ -69,6 +117,9 @@ async function resolveAccessToken(event: WhatsappRawEvent): Promise<string | nul
   );
 
   if (!secret?.value) {
+    console.error(
+      `[media-harvester] WhatsApp KMS secret not found for displayPhoneNumber=${event.displayPhoneNumber} kmsServiceId=${event.kmsServiceId} messageId=${event.messageId}`,
+    );
     return null;
   }
 
@@ -79,9 +130,6 @@ async function resolveAccessToken(event: WhatsappRawEvent): Promise<string | nul
 async function processRawEvent(event: WhatsappRawEvent): Promise<void> {
   const accessToken = await resolveAccessToken(event);
   if (!accessToken) {
-    console.error(
-      `[media-harvester] WhatsApp secret not found for displayPhoneNumber=${event.displayPhoneNumber} messageId=${event.messageId}`,
-    );
     return;
   }
 

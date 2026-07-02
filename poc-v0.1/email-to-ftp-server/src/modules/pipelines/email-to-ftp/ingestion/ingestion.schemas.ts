@@ -49,7 +49,7 @@ export const pollClaimsResponseSchema = {
     message: { type: "string" },
     lastProcessedUidBefore: {
       type: "integer",
-      description: "Email_Source_Master.last_processed_uid before this poll (only UIDs greater than this are candidates).",
+      description: "Ingestion_Channel_Master.last_processed_uid before this poll (only UIDs greater than this are candidates).",
     },
     lastProcessedUidAfter: {
       type: "integer",

@@ -26,7 +26,18 @@ export async function registerSwagger(app: FastifyInstance): Promise<void> {
       tags: [
         { name: openApiTags.health, description: "Liveness and readiness probes." },
         { name: openApiTags.whatsappWebhook, description: "Meta Cloud API webhook (verification + inbound events)." },
+        { name: openApiTags.whatsappProvisioning, description: "WhatsApp channel connect, list, and disconnect." },
       ],
+      components: {
+        securitySchemes: {
+          vaultToken: {
+            type: "apiKey",
+            in: "header",
+            name: "x-vault-token",
+            description: "Key vault API token (see key-vault).",
+          },
+        },
+      },
     },
   });
 

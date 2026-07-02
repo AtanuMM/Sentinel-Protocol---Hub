@@ -1,9 +1,9 @@
 export const provisioningBodySchema = {
   type: "object",
-  required: ["orgId", "zone"],
+  required: ["orgId", "insurance_company_code"],
   properties: {
     orgId: { type: "string", minLength: 2 },
-    zone: { type: "string", minLength: 2 },
+    insurance_company_code: { type: "string", minLength: 1 },
   },
 };
 

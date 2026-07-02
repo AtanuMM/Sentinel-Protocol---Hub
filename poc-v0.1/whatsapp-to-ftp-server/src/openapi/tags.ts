@@ -2,4 +2,5 @@
 export const openApiTags = {
   health: "Health",
   whatsappWebhook: "WhatsApp — webhook",
+  whatsappProvisioning: "WhatsApp — provisioning",
 } as const;

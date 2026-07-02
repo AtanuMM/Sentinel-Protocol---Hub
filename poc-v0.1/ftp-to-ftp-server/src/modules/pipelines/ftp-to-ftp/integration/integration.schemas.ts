@@ -1,8 +1,18 @@
 export const linkBucketBodySchema = {
   type: "object",
-  required: ["orgId", "zone", "username", "password", "bucketName", "kmsServiceId", "ftpHost"],
+  required: [
+    "orgId",
+    "insurance_company_code",
+    "zone",
+    "username",
+    "password",
+    "bucketName",
+    "kmsServiceId",
+  ],
   properties: {
     orgId: { type: "string", minLength: 2 },
+    insurance_company_code: { type: "string", minLength: 1 },
+    configuration_strategy: { type: "string", enum: ["DEDICATED", "SHARED"], default: "DEDICATED" },
     zone: { type: "string", minLength: 2 },
     username: { type: "string", minLength: 1 },
     password: { type: "string", minLength: 1 },
@@ -12,7 +22,7 @@ export const linkBucketBodySchema = {
     ftpHost: { type: "string", minLength: 1 },
     ftpPort: { type: "number" },
     secure: { type: "boolean" },
-    provider: { type: "string", enum: ["FTP", "MINIO", "S3", "GCP", "AZURE"] },
+    provider: { type: "string", enum: ["FTP", "MINIO", "S3", "GCP", "AZURE", "SFTP"] },
   },
 };
 

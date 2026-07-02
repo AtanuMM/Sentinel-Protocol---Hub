@@ -12,7 +12,7 @@ export interface ReadInput {
 
 export interface WriteInput {
   orgId: string
-  zoneId: string
+  insuranceCompanyCode: string
   contextFolder: string
   fileName: string
   mimeType: string
@@ -22,7 +22,7 @@ export interface WriteInput {
 
 export interface FileDescriptor {
   orgId: string
-  zoneId: string
+  insuranceCompanyCode: string
   claimFolder: string
   fileName: string
   filePath: string
@@ -55,7 +55,7 @@ export interface KafkaEventPayload {
   eventId: string
   timestamp: string
   orgId: string
-  zoneId: string
+  insuranceCompanyCode: string
   sourceChannel: string
   payload: {
     fileName: string

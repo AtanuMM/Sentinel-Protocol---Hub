@@ -2,9 +2,9 @@ import { createHash, randomUUID } from "crypto";
 import { Readable } from "stream";
 import { config } from "../../../../config";
 import { AppError } from "../../../../errors/appError";
-import { EmailSourceModel } from "../../../../infra/db";
 import { minioClient, producer, redisClient } from "../../../../infra/clients";
 import { EmailClaimArtifactRepository } from "../../../../repositories/emailClaimArtifact.repository";
+import { IngestionChannelRepository } from "../../../../repositories/ingestionChannel.repository";
 import { IngestionTraceEvent } from "../../../../types/ingestionEvent";
 import { buildDedupKey } from "../../../../utils/dedupKey";
 import { deleteRedisKeysByPattern } from "../../../../utils/redisScanDel";
@@ -60,32 +60,42 @@ export interface PollClaimsResult {
   pdfsIngested: number;
   ingested: PollClaimsIngestedItem[];
   message: string;
-  /** IMAP UID cursor before this poll (`Email_Source_Master.last_processed_uid`). */
+  /** IMAP UID cursor before this poll (`Ingestion_Channel_Master.last_processed_uid`). */
   lastProcessedUidBefore: number;
   /** IMAP UID cursor after this poll (unchanged if nothing scanned). */
   lastProcessedUidAfter: number;
 }
 
 export class EmailIngestionService {
-  constructor(private readonly artifactRepository: EmailClaimArtifactRepository) {}
+  constructor(
+    private readonly artifactRepository: EmailClaimArtifactRepository,
+    private readonly channelRepository: IngestionChannelRepository,
+  ) {}
 
   async pollClaimEmails(input: PollClaimsInput, vaultToken: string): Promise<PollClaimsResult> {
     const emailKey = input.email.trim();
-    let row = await EmailSourceModel.findByPk(emailKey);
+    const row = await this.channelRepository.findByEmailAndServiceId(emailKey, input.serviceId);
     if (!row) {
-      throw new AppError(404, "Email source not found in master database.", "EMAIL_SOURCE_NOT_FOUND");
+      throw new AppError(404, "Email channel not found in master database.", "EMAIL_SOURCE_NOT_FOUND");
     }
-    if (row.vault_service_id !== input.serviceId) {
-      throw new AppError(403, "serviceId does not match the registered email source.", "SERVICE_ID_MISMATCH");
+    if (row.kms_service_id !== input.serviceId) {
+      throw new AppError(403, "serviceId does not match the registered email channel.", "SERVICE_ID_MISMATCH");
     }
-    if (!row.is_active) {
-      throw new AppError(403, "Email source is not active.", "EMAIL_SOURCE_INACTIVE");
+    if (!row.is_onboarded) {
+      throw new AppError(403, "Email channel is not onboarded.", "EMAIL_SOURCE_INACTIVE");
     }
 
+    const orgId = row.organisation_id;
+    const insuranceCompanyCode = row.insurance_company_code;
+    const region = row.region ?? config.defaultEmailZone;
+
     if (input.resetCursor === true) {
-      await EmailSourceModel.update({ last_processed_uid: 0 }, { where: { email_address: emailKey } });
+      await this.channelRepository.updateEmailCursor(orgId, insuranceCompanyCode, {
+        last_processed_uid: 0,
+        imap_uidvalidity: null,
+      });
       await row.reload();
-      const dedupFlushPattern = `file:dedup:email:${row.organisation_id}:imap:${emailKey}:*`;
+      const dedupFlushPattern = `file:dedup:email:${orgId}:imap:${emailKey}:*`;
       await deleteRedisKeysByPattern(redisClient, dedupFlushPattern);
     }
 
@@ -116,7 +126,12 @@ export class EmailIngestionService {
 
         const searchResult = await client.search({ all: true }, { uid: true });
         const allUids = Array.isArray(searchResult) ? searchResult : [];
-        const lastUid = row.last_processed_uid;
+        const storedUidValidity = row.imap_uidvalidity;
+        const uidValidityChanged =
+          storedUidValidity !== null &&
+          uidValidity !== null &&
+          storedUidValidity !== uidValidity;
+        const lastUid = uidValidityChanged ? 0 : (row.last_processed_uid ?? 0);
         const newUids = allUids
           .filter((u) => u > lastUid)
           .sort((a, b) => a - b)
@@ -135,8 +150,6 @@ export class EmailIngestionService {
           };
         }
 
-        const orgId = row.organisation_id;
-        const zoneId = row.zone_id;
         const today = new Date().toISOString().split("T")[0];
 
         let maxSeenUid = lastUid;
@@ -196,7 +209,8 @@ export class EmailIngestionService {
           );
 
           const vvSeg = sanitizeUidValidityForSegment(uidValidity);
-          const folderPrefix = `${orgId}/${zoneId}/${today}/email/${sanitizedSubject}__uid-${uid}__vv-${vvSeg}/`;
+          const claimFolder = `${sanitizedSubject}__uid-${uid}__vv-${vvSeg}`;
+          const folderPrefix = `${orgId}/${insuranceCompanyCode}/${today}/email/${claimFolder}/`;
           const transcriptKey = `${folderPrefix}${EMAIL_TRANSCRIPT_OBJECT}`;
 
           const internalDateRaw = (msg as { internalDate?: Date | string | null }).internalDate;
@@ -274,7 +288,7 @@ export class EmailIngestionService {
               await this.artifactRepository.create({
                 id: artifactId,
                 organisation_id: orgId,
-                zone_id: zoneId,
+                zone_id: insuranceCompanyCode,
                 email_address: emailKey,
                 imap_uid: uid,
                 imap_mailbox: mailboxPath,
@@ -291,7 +305,7 @@ export class EmailIngestionService {
                 schemaVersion: 1,
                 traceId,
                 orgId,
-                zoneId,
+                zoneId: region,
                 landingPath,
                 originalPath,
                 timestamp: new Date().toISOString(),
@@ -322,8 +336,20 @@ export class EmailIngestionService {
           }
         }
         } finally {
-          if (maxSeenUid > lastUid) {
-            await EmailSourceModel.update({ last_processed_uid: maxSeenUid }, { where: { email_address: emailKey } });
+          if (maxSeenUid > lastUid || uidValidityChanged) {
+            const cursorUpdates: { last_processed_uid?: number; imap_uidvalidity?: string } = {};
+            if (uidValidityChanged && uidValidity !== null) {
+              cursorUpdates.imap_uidvalidity = uidValidity;
+              if (maxSeenUid > 0) cursorUpdates.last_processed_uid = maxSeenUid;
+            } else if (maxSeenUid > lastUid) {
+              cursorUpdates.last_processed_uid = maxSeenUid;
+            }
+            if (uidValidity !== null && row.imap_uidvalidity === null && !uidValidityChanged) {
+              cursorUpdates.imap_uidvalidity = uidValidity;
+            }
+            if (Object.keys(cursorUpdates).length > 0) {
+              await this.channelRepository.updateEmailCursor(orgId, insuranceCompanyCode, cursorUpdates);
+            }
           }
         }
 

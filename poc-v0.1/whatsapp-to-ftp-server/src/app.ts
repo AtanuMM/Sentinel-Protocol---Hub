@@ -38,7 +38,7 @@ export const buildApp = async (): Promise<FastifyInstance> => {
     reply.send({
       service: "whatsapp-to-ftp-server",
       openApi: "/documentation",
-      note: "Meta webhook: GET/POST /v1/whatsapp/webhook",
+      note: "Meta webhook: GET/POST /v1/whatsapp/webhook. Provisioning: POST /api/whatsapp-to-ftp/whatsapp-channel (x-vault-token).",
     }),
   );
 

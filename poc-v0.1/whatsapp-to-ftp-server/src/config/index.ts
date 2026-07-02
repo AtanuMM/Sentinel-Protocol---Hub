@@ -53,5 +53,6 @@ export const config = {
   kmsBaseUrl: (process.env.KMS_BASE_URL ?? "").trim(),
   whatsappVerifyToken: required("WHATSAPP_VERIFY_TOKEN"),
   whatsappAppSecret: required("WHATSAPP_APP_SECRET"),
+  metaAppId: required("META_APP_ID"),
   whatsappRawEventsTopic: process.env.WHATSAPP_RAW_EVENTS_TOPIC ?? "whatsapp-raw-events",
 };
