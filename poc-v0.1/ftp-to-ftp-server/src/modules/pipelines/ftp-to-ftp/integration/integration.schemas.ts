@@ -6,7 +6,6 @@ export const linkBucketBodySchema = {
     "zone",
     "username",
     "password",
-    "bucketName",
     "kmsServiceId",
   ],
   properties: {
@@ -16,7 +15,7 @@ export const linkBucketBodySchema = {
     zone: { type: "string", minLength: 2 },
     username: { type: "string", minLength: 1 },
     password: { type: "string", minLength: 1 },
-    bucketName: { type: "string", minLength: 3 },
+    bucketName: { type: "string" },
     region: { type: "string" },
     kmsServiceId: { type: "string", minLength: 1 },
     ftpHost: { type: "string", minLength: 1 },

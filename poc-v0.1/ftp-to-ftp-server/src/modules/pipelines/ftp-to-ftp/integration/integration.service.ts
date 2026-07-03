@@ -11,7 +11,7 @@ interface LinkBucketInput {
   zone: string;
   username: string;
   password: string;
-  bucketName: string;
+  bucketName?: string;
   region?: string;
   kmsServiceId: string;
   vaultToken: string;
@@ -19,6 +19,14 @@ interface LinkBucketInput {
   ftpPort?: number;
   secure?: boolean;
   provider?: string;
+}
+
+function resolveBucketName(provider: string, bucketName?: string): string {
+  const normalized = bucketName?.trim();
+  if (provider === "FTP" || provider === "SFTP") {
+    return normalized || "/";
+  }
+  return normalized ?? bucketName ?? "";
 }
 
 function buildCredentialValue(input: LinkBucketInput): Record<string, unknown> {
@@ -76,6 +84,7 @@ export class IntegrationService {
 
   async linkBucket(input: LinkBucketInput): Promise<{ message: string; is_onboarded: boolean }> {
     const provider = (input.provider ?? "FTP").toUpperCase();
+    const bucketName = resolveBucketName(provider, input.bucketName);
     const prefix = `${input.orgId}/${input.insurance_company_code}/`;
     const rootMarker = `${prefix}.sentinel_root`;
 
@@ -89,7 +98,7 @@ export class IntegrationService {
       });
 
       await tpaClient.putObject(
-        input.bucketName,
+        bucketName,
         rootMarker,
         Buffer.from("HIERARCHY_INITIALIZED"),
         undefined,
@@ -117,7 +126,7 @@ export class IntegrationService {
       default:
         keyName = `ftp:${input.orgId}`;
     }
-    const credentialValue = buildCredentialValue(input);
+    const credentialValue = buildCredentialValue({ ...input, bucketName });
     await vaultClient.storeSecret(
       {
         serviceId: input.kmsServiceId,
@@ -133,7 +142,7 @@ export class IntegrationService {
       channel_type: provider,
       configuration_strategy: input.configuration_strategy ?? "DEDICATED",
       source_prefix: prefix,
-      source_bucket: input.bucketName,
+      source_bucket: bucketName,
       external_username: input.username,
       external_password_encrypted: encryptText(input.password),
       region: input.region ?? input.zone,
@@ -143,7 +152,7 @@ export class IntegrationService {
     });
 
     return {
-      message: `Integration Linked & Folders Created for ${input.bucketName}.`,
+      message: `Integration Linked & Folders Created for ${bucketName}.`,
       is_onboarded: true,
     };
   }

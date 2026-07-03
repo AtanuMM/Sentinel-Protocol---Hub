@@ -32,8 +32,8 @@ function fileDescriptorFromParts(
   filePath: string,
   fileSizeBytes: number,
 ): FileDescriptor | null {
-  if (parts.length < 6) return null
-  const claimFolder = parts[4]
+  if (parts.length < 7) return null
+  const claimFolder = parts[5]
   const fileName = parts[parts.length - 1]
   if (!claimFolder || !fileName) return null
   const lower = fileName.toLowerCase()
@@ -93,7 +93,9 @@ export const ftpReaderDriver: ReaderDriver = {
     }
 
     const client = new Client()
-    const root = '/'
+    const root = typeof credentials.bucket === 'string' && credentials.bucket.trim() !== ''
+      ? '/' + credentials.bucket.trim().replace(/^\//, '')
+      : '/'
     const out: FileDescriptor[] = []
     try {
       await client.access({ host, port, user, password, secure })

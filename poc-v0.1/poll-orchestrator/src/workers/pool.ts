@@ -55,7 +55,11 @@ async function handlePollJob(job: PollJobMessage): Promise<void> {
   }
 
   const credSecret = secrets.find(
-    (s) => typeof s.value === 'object' && s.value !== null && 'provider' in s.value
+    (s) =>
+      typeof s.value === 'object' &&
+      s.value !== null &&
+      'provider' in s.value &&
+      (s.value as Record<string, unknown>).provider === job.channelType
   )
   if (!credSecret) {
     console.error(`[poll-worker] No provider credential found for orgId ${job.orgId}`)
@@ -74,6 +78,7 @@ async function handlePollJob(job: PollJobMessage): Promise<void> {
     ...(credSecret.value as Record<string, unknown>),
     insuranceCompanyCode,
   }
+  console.log('[poll-worker] sourceCredentials:', JSON.stringify(sourceCredentials, null, 2))
   const sourceChannel = sourceChannelForType(job.channelType)
 
   const files = await listNewFiles({
