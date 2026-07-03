@@ -3,6 +3,7 @@ import type { FileDescriptor, ReadInput, ReaderDriver } from './types'
 import { azureReaderDriver } from './drivers/reader/azure.reader'
 import { emailReaderDriver } from './drivers/reader/email.reader'
 import { ftpReaderDriver } from './drivers/reader/ftp.reader'
+import { sftpReaderDriver } from './drivers/reader/sftp.reader'
 import { gcpReaderDriver } from './drivers/reader/gcp.reader'
 import { minioReaderDriver } from './drivers/reader/minio.reader'
 import { s3ReaderDriver } from './drivers/reader/s3.reader'
@@ -31,6 +32,8 @@ function resolveDriver(provider: string): ReaderDriver {
   switch (provider) {
     case 'FTP':
       return ftpReaderDriver
+    case 'SFTP':
+      return sftpReaderDriver
     case 'MINIO':
       return minioReaderDriver
     case 'EMAIL':
@@ -43,7 +46,7 @@ function resolveDriver(provider: string): ReaderDriver {
       return azureReaderDriver
     default:
       throw new Error(
-        `Unsupported source provider "${provider}". Expected: FTP, MINIO, EMAIL, S3, GCP, AZURE`
+        `Unsupported source provider "${provider}". Expected: FTP, SFTP, MINIO, EMAIL, S3, GCP, AZURE`
       )
   }
 }

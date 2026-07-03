@@ -65,6 +65,16 @@ function buildCredentialValue(input: LinkBucketInput): Record<string, unknown> {
         account_key: input.password,
         container: input.bucketName,
       };
+    case "SFTP":
+      return {
+        provider: "SFTP",
+        host: input.ftpHost,
+        port: input.ftpPort ?? 22,
+        user: input.username,
+        password: input.password,
+        secure: input.secure ?? false,
+        bucket: input.bucketName,
+      };
     case "FTP":
     default:
       return {
