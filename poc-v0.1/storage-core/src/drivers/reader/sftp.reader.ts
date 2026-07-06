@@ -66,6 +66,7 @@ async function walkSftpTree(
         await walkSftpTree(client, fullPath, orgId, insuranceCompanyCode, out)
       } else if (ent.type === '-') {
         const parts = fullPath.split('/').filter(Boolean)
+        console.log('[sftp-reader] found file:', fullPath, 'parts:', fullPath.split('/').filter(Boolean))
         const fd = fileDescriptorFromParts(
           parts,
           orgId,
@@ -92,12 +93,14 @@ export const sftpReaderDriver: ReaderDriver = {
     const port = typeof credentials.port === 'number' && Number.isFinite(credentials.port) ? credentials.port : 22
 
     const client = new SftpClient()
-    const root = typeof credentials.bucket === 'string' && credentials.bucket.trim() !== ''
-      ? '/' + credentials.bucket.trim().replace(/^\//, '')
-      : '/'
+    const bucket = typeof credentials.bucket === 'string' ? credentials.bucket.trim().replace(/^\//, '') : ''
     const out: FileDescriptor[] = []
     try {
+      console.log('[sftp-reader] connecting to:', host, port, 'bucket:', bucket)
       await client.connect({ host, port, username: user, password })
+      const cwd = await client.cwd()
+      const root = bucket ? `${cwd}/${bucket}` : cwd
+      console.log('[sftp-reader] connected, cwd:', cwd, 'resolved root:', root)
       await walkSftpTree(client, root, orgId, insuranceCompanyCode, out)
       return out
     } finally {
