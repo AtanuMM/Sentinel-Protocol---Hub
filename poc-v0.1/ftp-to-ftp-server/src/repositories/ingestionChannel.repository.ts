@@ -48,6 +48,12 @@ export class IngestionChannelRepository {
     });
   }
 
+  async findAllByOrgId(orgId: string) {
+    return IngestionChannelModel.findAll({
+      where: { organisation_id: orgId },
+    });
+  }
+
   async updateEncryptedPassword(
     orgId: string,
     insuranceCompanyCode: string,

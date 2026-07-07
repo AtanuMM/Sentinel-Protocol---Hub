@@ -9,8 +9,8 @@ interface LinkBucketInput {
   insurance_company_code: string;
   configuration_strategy?: "DEDICATED" | "SHARED";
   zone: string;
-  username: string;
-  password: string;
+  username?: string;
+  password?: string;
   bucketName?: string;
   region?: string;
   kmsServiceId: string;
@@ -19,6 +19,8 @@ interface LinkBucketInput {
   ftpPort?: number;
   secure?: boolean;
   provider?: string;
+  projectId?: string;
+  google_application_credentials?: Record<string, unknown>;
 }
 
 function resolveBucketName(provider: string, bucketName?: string): string {
@@ -53,10 +55,9 @@ function buildCredentialValue(input: LinkBucketInput): Record<string, unknown> {
     case "GCP":
       return {
         provider,
-        project_id: input.ftpHost,
-        access_key: input.username,
-        secret_key: input.password,
-        bucket: input.bucketName,
+        project_id: input.projectId,
+        bucket_name: input.bucketName,
+        google_application_credentials: input.google_application_credentials,
       };
     case "AZURE":
       return {
@@ -94,6 +95,41 @@ export class IntegrationService {
 
   async linkBucket(input: LinkBucketInput): Promise<{ message: string; is_onboarded: boolean }> {
     const provider = (input.provider ?? "FTP").toUpperCase();
+
+    const existingChannels = await this.repository.findAllByOrgId(input.orgId);
+    if (existingChannels.length > 0) {
+      const existingKmsServiceId = existingChannels[0].kms_service_id;
+      const allShareSameKmsServiceId = existingChannels.every(
+        (channel) => channel.kms_service_id === existingKmsServiceId,
+      );
+      if (!allShareSameKmsServiceId) {
+        throw new Error(
+          `orgId '${input.orgId}' has channels registered under conflicting kmsServiceId values. Manual reconciliation is required before linking another channel.`,
+        );
+      }
+      if (existingKmsServiceId && existingKmsServiceId !== input.kmsServiceId) {
+        throw new Error(
+          `orgId '${input.orgId}' already has channels registered under a different kmsServiceId ('${existingKmsServiceId}'). Refusing to link with a different kmsServiceId ('${input.kmsServiceId}') — this looks like a data-isolation mismatch. If this org's vault service genuinely changed, this requires manual confirmation, not a normal onboarding call.`,
+        );
+      }
+    }
+
+    if (provider === "GCP") {
+      if (!input.projectId?.trim()) {
+        throw new Error("projectId is required when provider is GCP");
+      }
+      if (!input.google_application_credentials) {
+        throw new Error("google_application_credentials is required when provider is GCP");
+      }
+    } else {
+      if (!input.username?.trim()) {
+        throw new Error("username is required when provider is not GCP");
+      }
+      if (!input.password?.trim()) {
+        throw new Error("password is required when provider is not GCP");
+      }
+    }
+
     const bucketName = resolveBucketName(provider, input.bucketName);
     const prefix = `${input.orgId}/${input.insurance_company_code}/`;
     const rootMarker = `${prefix}.sentinel_root`;
@@ -103,8 +139,8 @@ export class IntegrationService {
         endPoint: config.minioEndpoint,
         port: config.minioPort,
         useSSL: config.minioUseSSL,
-        accessKey: input.username,
-        secretKey: input.password,
+        accessKey: input.username!,
+        secretKey: input.password!,
       });
 
       await tpaClient.putObject(
@@ -153,8 +189,8 @@ export class IntegrationService {
       configuration_strategy: input.configuration_strategy ?? "DEDICATED",
       source_prefix: prefix,
       source_bucket: bucketName,
-      external_username: input.username,
-      external_password_encrypted: encryptText(input.password),
+      external_username: input.username ?? "",
+      external_password_encrypted: encryptText(input.password ?? ""),
       region: input.region ?? input.zone,
       is_onboarded: true,
       kms_service_id: input.kmsServiceId,

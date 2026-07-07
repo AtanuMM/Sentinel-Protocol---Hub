@@ -66,7 +66,7 @@ async function walkSftpTree(
         await walkSftpTree(client, fullPath, orgId, insuranceCompanyCode, out)
       } else if (ent.type === '-') {
         const parts = fullPath.split('/').filter(Boolean)
-        console.log('[sftp-reader] found file:', fullPath, 'parts:', fullPath.split('/').filter(Boolean))
+        // console.log('[sftp-reader] found file:', fullPath, 'parts:', fullPath.split('/').filter(Boolean))
         const fd = fileDescriptorFromParts(
           parts,
           orgId,

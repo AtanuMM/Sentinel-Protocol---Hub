@@ -9,15 +9,18 @@ This service **does not expose an HTTP API**. It runs as a background process th
 3. Consumes jobs in a worker pool
 4. Fetches source credentials from Key Vault at runtime
 5. Delegates all file I/O to `@sentinel/storage-core` (list → read → write)
-6. Deduplicates FTP/object-storage files via Redis
+6. Deduplicates object-storage files via Redis
 7. Advances IMAP cursors for email channels in Postgres
 
-It centralizes polling for **FTP, MinIO, S3, GCP, Azure, and Email** channels. WhatsApp ingestion is **not** handled here — it is webhook-driven in `whatsapp-to-ftp-server`.
+It centralizes polling for **FTP, SFTP, MinIO, S3, Azure, and Email** channels. WhatsApp ingestion is **not** handled here — it is webhook-driven in `whatsapp-to-ftp-server`.
+
+**Mental model:** Poll-orchestrator is a cron + Kafka worker that turns DB channel rows into file transfers. It never opens FTP/IMAP/S3 directly — it always calls `storage-core`. Source credentials come from Key Vault at job time. Landing bucket config comes from orchestrator env vars.
 
 ---
 
 ## Table of Contents
 
+- [What Changed (v2)](#what-changed-v2)
 - [Architecture](#architecture)
 - [Dependencies](#dependencies)
 - [Quick Start](#quick-start)
@@ -27,14 +30,34 @@ It centralizes polling for **FTP, MinIO, S3, GCP, Azure, and Email** channels. W
 - [Scheduler Flow](#scheduler-flow)
 - [Worker Flow](#worker-flow)
 - [Sequence Diagrams](#sequence-diagrams)
-- [Object-Storage Pipeline](#object-storage-pipeline-ftp--minio--s3--gcp--azure)
+- [Object-Storage Pipeline](#object-storage-pipeline-ftp--sftp--minio--s3--azure)
 - [Email Pipeline](#email-pipeline-imap)
 - [storage-core Integration](#storage-core-integration)
+- [Source Path Conventions](#source-path-conventions)
+- [Provider Support Matrix](#provider-support-matrix)
 - [Kafka Topics](#kafka-topics)
 - [Relationship to Other Services](#relationship-to-other-services)
 - [Onboarding Prerequisites](#onboarding-prerequisites)
 - [Troubleshooting](#troubleshooting)
 - [Known Gaps](#known-gaps)
+- [Project Structure](#project-structure)
+
+---
+
+## What Changed (v2)
+
+| Area | Before | Now |
+|------|--------|-----|
+| **Vault secret selection** | First secret with any `provider` field | **Strict match:** `secret.value.provider === job.channelType` |
+| **SFTP support** | Not in storage-core | **Full SFTP reader** (`ssh2-sftp-client`) |
+| **Azure reader** | Stub | **Fully implemented** (`@azure/storage-blob`) |
+| **GCP reader/writer** | Stub | Still **stub** (throws) |
+| **Azure writer** | Stub | Still **stub** (throws) |
+| **FTP path parsing** | 6 segments, root always `/` | **7 segments**, root = `credentials.bucket` or `/` |
+| **Dedup source mapping** | Binary FTP vs whatsapp | `sourceTypeForChannelType()` maps all channel types |
+| **`sourceChannel` mapping** | WHATSAPP fell through to FTP | Explicit: EMAIL → `EMAIL_INGESTION`, WHATSAPP → `WHATSAPP_INGESTION`, else → `FTP_INGESTION` |
+| **Integration provisioning** | Less strict channel typing | DB `channel_type` = Vault `provider` (FTP, SFTP, MINIO, S3, etc.) |
+| **S3 writer** | Basic put | `@aws-sdk/lib-storage` Upload for streaming multipart |
 
 ---
 
@@ -58,7 +81,7 @@ It centralizes polling for **FTP, MinIO, S3, GCP, Azure, and Email** channels. W
 │  └──────────────┘                                   ▼                  │
 │                                          ┌──────────────────┐         │
 │  ┌──────────────┐                        │  storage-core    │         │
-│  │  Redis       │◀── FTP dedup ──────────│  list/read/write │         │
+│  │  Redis       │◀── object dedup ─────│  list/read/write │         │
 │  └──────────────┘                        └────────┬─────────┘         │
 │                                                    │                    │
 └────────────────────────────────────────────────────┼────────────────────┘
@@ -66,10 +89,15 @@ It centralizes polling for **FTP, MinIO, S3, GCP, Azure, and Email** channels. W
                               ┌──────────────────────┼──────────────────────┐
                               ▼                      ▼                      ▼
                        TPA source            Landing bucket          Kafka
-                       (FTP/IMAP/S3)         (MinIO/S3 env)     ingestion-events
+                  (FTP/SFTP/IMAP/S3)      (MinIO/S3 env)     ingestion-events
 ```
 
-**Mental model:** Poll-orchestrator is a cron + Kafka worker that turns DB channel rows into file transfers. It never opens FTP/IMAP/S3 directly — it always calls `storage-core`. Source credentials come from Key Vault at job time. Landing bucket config comes from orchestrator env vars.
+### Two-bucket model
+
+| Bucket | Credentials from | Used for |
+|--------|------------------|----------|
+| **Source** (TPA-side) | Key Vault secret | `listNewFiles` + `readFromSource` |
+| **Landing** (Sentinel-side) | Orchestrator env (`STORAGE_PROVIDER`, `MINIO_*`, `AWS_*`) | `writeToLanding` |
 
 ---
 
@@ -79,7 +107,7 @@ It centralizes polling for **FTP, MinIO, S3, GCP, Azure, and Email** channels. W
 |--------|------|
 | **PostgreSQL** | Channel registry (`Ingestion_Channel_Master`) — shared with ingestion microservices |
 | **Kafka** | Job queue (`poll-jobs`) + downstream events (`ingestion-events`) |
-| **Redis** | FTP/object-storage dedup locks |
+| **Redis** | Object-storage dedup locks |
 | **Key Vault** | Source credentials (FTP host, IMAP password, MinIO keys, etc.) |
 | **storage-core** | Source readers + landing writers + Kafka event publish |
 | **Landing storage** | Sentinel destination bucket (MinIO/S3/GCP/Azure via env) |
@@ -111,6 +139,8 @@ npm run dev
 ---
 
 ## Environment Variables
+
+### poll-orchestrator
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
@@ -177,8 +207,10 @@ Email-specific columns:
 
 Channels are **provisioned by ingestion microservices**, not by poll-orchestrator:
 
-- **FTP/MinIO/S3/etc.** → `ftp-to-ftp-server` integration (`linkBucket`)
+- **FTP/SFTP/MinIO/S3/Azure** → `ftp-to-ftp-server` integration (`linkBucket`)
 - **Email** → `email-to-ftp-server` provisioning (`registerEmailSource`)
+
+At provisioning time, DB `channel_type` is set to the Vault `provider` string — this enables strict credential matching in the worker.
 
 ---
 
@@ -188,11 +220,11 @@ File: `src/scheduler/cron.ts`
 
 Every `POLL_INTERVAL_MS`:
 
-### Object-storage channels (FTP, MINIO, S3, …)
+### Object-storage channels (FTP, SFTP, MINIO, S3, …)
 
 For each active non-EMAIL row:
 
-1. Build a `PollJobMessage` with org/insurer/KMS/vault token/channel type
+1. Build a `PollJobMessage` with org/insurer/KMS/vault token/`channelType` from DB
 2. Publish to Kafka `poll-jobs` with message key `{orgId}:{kmsServiceId}`
 
 ### Email channels
@@ -221,6 +253,38 @@ For every Kafka message:
 3. Fetch secrets → `vaultClient.listSecretsForService(kmsServiceId, plainToken)`
 4. Branch on `job.channelType === 'EMAIL'` → object-storage handler or email handler
 
+### Strict credential matching (object-storage)
+
+The worker picks the Vault secret where **`value.provider === job.channelType`** — not merely the first secret with a `provider` field.
+
+```typescript
+const credSecret = secrets.find(
+  (s) =>
+    typeof s.value === 'object' &&
+    s.value !== null &&
+    'provider' in s.value &&
+    (s.value as Record<string, unknown>).provider === job.channelType
+)
+```
+
+If an org has both `FTP` and `MINIO` secrets in the same KMS service, the DB `channel_type` on the scheduled job determines which secret is used.
+
+### `sourceChannel` mapping
+
+| `channelType` | `sourceChannel` (landing path + Kafka metadata) |
+|---------------|------------------------------------------------|
+| `EMAIL` | `EMAIL_INGESTION` |
+| `WHATSAPP` | `WHATSAPP_INGESTION` |
+| everything else | `FTP_INGESTION` |
+
+### Redis dedup `sourceType` mapping
+
+| `channelType` | Redis `sourceType` |
+|---------------|-------------------|
+| FTP, SFTP, S3, MINIO, GCP, AZURE | `ftp` |
+| WHATSAPP | `whatsapp` |
+| EMAIL | *(not used — email skips Redis)* |
+
 ---
 
 ## Sequence Diagrams
@@ -245,9 +309,7 @@ sequenceDiagram
   Note over Scheduler: First poll cycle runs after POLL_INTERVAL_MS
 ```
 
-### Object-storage poll (FTP / MinIO / S3)
-
-One scheduler cycle for a single channel, then one file transfer:
+### Object-storage poll (FTP / SFTP / MinIO / S3 / Azure)
 
 ```mermaid
 sequenceDiagram
@@ -264,12 +326,13 @@ sequenceDiagram
 
   Scheduler->>DB: findActiveObjectStorageChannelsForPolling()
   DB-->>Scheduler: channel rows
-  Scheduler->>KJobs: publishPollJob (PollJobMessage)
+  Scheduler->>KJobs: publishPollJob (channelType from DB)
 
   KJobs->>Worker: consume message
   Worker->>Worker: decryptText(vaultToken)
   Worker->>Vault: listSecretsForService(kmsServiceId)
-  Vault-->>Worker: secrets (provider, host, keys...)
+  Note over Worker,Vault: Pick secret where value.provider === job.channelType
+  Vault-->>Worker: matching credentials
   Worker->>SC: listNewFiles(sourceCredentials)
   SC->>SRC: connect + list/walk files
   SRC-->>SC: objects matching path convention
@@ -282,21 +345,16 @@ sequenceDiagram
     else claimed
       Worker->>SC: readFromSource(filePath)
       SC->>SRC: download stream
-      SRC-->>SC: Readable
       SC-->>Worker: stream
       Worker->>SC: writeToLanding(stream)
-      SC->>LND: putObject (landing env credentials)
+      SC->>LND: putObject / Upload
       SC->>KEvents: publishEvent (file metadata)
       Worker->>Redis: SET dedupKey processed EX
     end
   end
 ```
 
-**MinIO/S3 variant:** Same diagram — `SRC` is the TPA bucket (MinIO SDK or AWS SDK) instead of an FTP server. Vault secret `provider` selects the storage-core reader (`MINIO`, `S3`, etc.).
-
 ### Email poll (IMAP)
-
-Email skips Redis dedup and `readFromSource`; content is buffered during `listNewFiles`:
 
 ```mermaid
 sequenceDiagram
@@ -311,26 +369,14 @@ sequenceDiagram
   participant KEvents as Kafka ingestion-events
 
   Scheduler->>DB: findActiveEmailChannelsForPolling()
-  DB-->>Scheduler: EMAIL channel rows
-  Scheduler->>KJobs: publishPollJob (channelType=EMAIL, emailAddress)
+  Scheduler->>KJobs: publishPollJob (channelType=EMAIL)
 
   KJobs->>Worker: consume message
-  Worker->>Worker: decryptText(vaultToken)
-  Worker->>Vault: listSecretsForService(kmsServiceId)
-  Vault-->>Worker: secrets (match value.email)
-  Worker->>DB: findByOrgIdInsurerAndChannel (fresh cursor)
-  DB-->>Worker: last_processed_uid, imap_uidvalidity
-
+  Worker->>Vault: list secrets (match value.email)
+  Worker->>DB: fresh last_processed_uid + imap_uidvalidity
   Worker->>SC: listNewFiles (provider=EMAIL, cursor)
-  SC->>IMAP: connect + lock INBOX
-  SC->>IMAP: search UIDs > lastProcessedUid
-  loop each matched UID (max 50)
-    SC->>IMAP: fetch envelope + PDF parts
-    SC->>SC: keyword match + build transcript PDF
-    SC->>SC: attach bytes to emailMeta.bufferedContent
-  end
-  SC->>IMAP: logout
-  SC-->>Worker: FileDescriptor[] (with bufferedContent)
+  SC->>IMAP: connect, search UIDs, fetch PDFs + transcript
+  SC-->>Worker: descriptors with bufferedContent
 
   alt no descriptors
     Worker-->>Worker: do not advance cursor
@@ -344,6 +390,21 @@ sequenceDiagram
   end
 ```
 
+### Provider selection flow
+
+```mermaid
+flowchart TD
+  A[PollJobMessage.channelType] --> B{EMAIL?}
+  B -->|yes| C[Match secret by value.email]
+  B -->|no| D[Match secret where value.provider === channelType]
+  D --> E{Found?}
+  E -->|no| F[Log error + skip job]
+  E -->|yes| G[Merge insuranceCompanyCode]
+  G --> H[storage-core resolveDriver via sourceCredentials.provider]
+  C --> I[Add provider EMAIL + DB cursor]
+  I --> H
+```
+
 ### Side-by-side: object-storage vs email
 
 ```mermaid
@@ -355,7 +416,7 @@ flowchart LR
   end
 
   subgraph eml [Email]
-    B1[listNewFiles<br/>+ IMAP fetch] --> B2[writeToLanding<br/>from buffer]
+    B1[listNewFiles + IMAP fetch] --> B2[writeToLanding from buffer]
     C1[Postgres cursor] -.-> B1
     C1 -.-> B2
   end
@@ -368,31 +429,34 @@ flowchart LR
 
 ---
 
-## Object-Storage Pipeline (FTP / MinIO / S3 / GCP / Azure)
+## Object-Storage Pipeline (FTP / SFTP / MinIO / S3 / Azure)
 
-> See [Object-storage poll sequence diagram](#object-storage-poll-ftp--minio--s3) for the full end-to-end flow.
+> See [Object-storage poll sequence diagram](#object-storage-poll-ftp--sftp--minio--s3--azure) for the full end-to-end flow.
 
 ### 1. Pick credentials from Vault
 
-Find the first Vault secret whose value object has a `provider` field. That `provider` string (e.g. `FTP`, `MINIO`, `S3`) determines which storage-core reader runs — **not** `job.channelType` from the Kafka message.
+Find the Vault secret where **`value.provider === job.channelType`**. That `provider` string also determines which storage-core reader runs.
 
 Typical Vault credential shapes (stored by `ftp-to-ftp-server` integration):
 
-| Provider | Vault value fields |
-|----------|-------------------|
-| FTP | `host`, `port`, `user`, `password`, `secure`, `bucket` |
-| MINIO | `endpoint`, `access_key`, `secret_key`, `bucket` |
-| S3 | `region`, `access_key`, `secret_key`, `bucket`, optional `endpoint` |
-| GCP | `project_id`, `access_key`, `secret_key`, `bucket` |
-| AZURE | `account_name`, `account_key`, `container` |
+| Provider | Vault `value` fields | Vault `keyName` |
+|----------|---------------------|-----------------|
+| FTP | `provider, host, port, user, password, secure, bucket` | `ftp:{orgId}` |
+| SFTP | `provider, host, port, user, password, secure, bucket` | `sftp:{orgId}` |
+| MINIO | `provider, endpoint, access_key, secret_key, bucket, secure` | `ftp:{orgId}` |
+| S3 | `provider, region, access_key, secret_key, bucket` | `s3:{orgId}` |
+| GCP | `provider, project_id, access_key, secret_key, bucket` | `gcp:{orgId}` |
+| AZURE | `provider, account_name, account_key, container` | `azure:{orgId}` |
 
 ### 2. List files — `storage-core.listNewFiles()`
 
 | Driver | Connection | Listing behavior |
 |--------|------------|------------------|
-| **FTP** | `basic-ftp` → host:port | Recursively walks `/`, parses `/Health_Claims/.../{claimFolder}/{file}` |
-| **MinIO** | MinIO SDK → TPA endpoint | Lists all objects in source bucket, parses 6+ segment keys |
-| **S3** | AWS SDK → region + keys | Lists all objects, parses 7+ segment keys |
+| **FTP** | `basic-ftp` → host:port | Recursively walks `/{bucket}` or `/`, parses 7-segment paths |
+| **SFTP** | `ssh2-sftp-client` → host:22 | Walks `{cwd}/{bucket}`, parses 7-segment paths; skips inaccessible dirs |
+| **MinIO** | MinIO SDK → TPA endpoint | Lists all objects in source bucket, parses **6-segment** keys |
+| **S3** | AWS SDK → region + keys | Lists all objects, parses 7-segment keys |
+| **Azure** | `@azure/storage-blob` | Lists container blobs, parses 7-segment keys |
 
 Returns `FileDescriptor[]`. **All matching files** are returned every cycle — dedup happens in the orchestrator, not in storage-core.
 
@@ -409,7 +473,8 @@ Email channels skip Redis dedup — IMAP UID cursor handles idempotency.
 ### 4. Read from source — `storage-core.readFromSource()`
 
 - **FTP:** new connection, streams file via `downloadTo`
-- **MinIO/S3:** `getObject(bucket, filePath)` → readable stream
+- **SFTP:** new SSH connection, `createReadStream(filePath)`
+- **MinIO/S3/Azure:** `getObject` / `download` → readable stream
 
 ### 5. Write to landing — `storage-core.writeToLanding()`
 
@@ -421,16 +486,9 @@ Object key pattern:
 {orgId}/{insuranceCompanyCode}/{YYYY-MM-DD}/{channel}/{claimFolder}/{fileName}
 ```
 
-where `channel` = source channel lowercased with `_ingestion` stripped (`ftp`, `email`, `whatsapp`).
+where `channel` = `sourceChannel` lowercased with `_ingestion` stripped (`ftp`, `email`, `whatsapp`).
 
 After upload, storage-core publishes an **`ingestion-events`** Kafka message with file metadata.
-
-### Two-bucket model
-
-| Bucket | Credentials source | Used for |
-|--------|-------------------|----------|
-| **Source** (TPA-side) | Key Vault secret | Read via storage-core readers |
-| **Landing** (Sentinel-side) | Orchestrator env (`STORAGE_PROVIDER`, `MINIO_*`, `AWS_*`) | Write via storage-core writers |
 
 ---
 
@@ -501,11 +559,67 @@ Poll-orchestrator calls exactly three public APIs from `@sentinel/storage-core`:
 
 Orchestrator never imports reader/writer drivers directly.
 
+### Call sites in `workers/pool.ts`
+
+| Line | Call | When |
+|------|------|------|
+| ~84 | `listNewFiles(...)` | Object-storage — list TPA files |
+| ~101 | `readFromSource(...)` | Object-storage — stream one file |
+| ~111 | `writeToLanding(stream, ...)` | Object-storage — upload to landing |
+| ~215 | `listNewFiles(...)` | Email — IMAP fetch + buffer |
+| ~243 | `writeToLanding(Readable.from(buf), ...)` | Email — upload from memory |
+
 Environment variables consumed by storage-core must be set on the poll-orchestrator process:
 
 ```
 STORAGE_PROVIDER, MINIO_*, AWS_*, KAFKA_BROKER, IMAP_POLL_MAILBOX (optional)
 ```
+
+---
+
+## Source Path Conventions
+
+Files are only ingested if their path matches the reader's segment rules. **MinIO differs from the rest.**
+
+### FTP / SFTP / S3 / Azure — 7 segments
+
+```
+/{bucket}/Health_Claims/{TPA}/{YYYY}/{MM_Month}/{CLM-...}/{filename}
+  [0]     [1]           [2]   [3]    [4]        [5]         [6]
+                              claimFolder = parts[5]
+                              fileName    = parts[last]
+```
+
+| Reader | Root / listing start |
+|--------|---------------------|
+| FTP | `/{credentials.bucket}` if set, else `/` |
+| SFTP | `{cwd}/{credentials.bucket}` if bucket set, else `cwd` |
+| S3 | Lists entire bucket |
+| Azure | Lists entire container |
+
+### MinIO — 6 segments (different)
+
+```
+{seg0}/{seg1}/{seg2}/{seg3}/{claimFolder}/{fileName}
+                              parts[4]     parts[5]
+```
+
+**Onboarding pitfall:** A file laid out for FTP (7 segments with `Health_Claims` prefix) may be **ignored by the MinIO reader** and vice versa.
+
+---
+
+## Provider Support Matrix
+
+| Provider | Reader | Writer (landing) | Poll-orchestrator | Provisioning |
+|----------|--------|------------------|-------------------|--------------|
+| FTP | ✅ | ✅ (MINIO/S3 landing) | ✅ | ✅ `linkBucket` |
+| SFTP | ✅ | ✅ (MINIO/S3 landing) | ✅ | ✅ `linkBucket` |
+| MINIO | ✅ | ✅ | ✅ | ✅ `linkBucket` |
+| S3 | ✅ | ✅ | ✅ | ✅ `linkBucket` |
+| AZURE | ✅ | ❌ stub | ✅ list/read only | ✅ `linkBucket` |
+| GCP | ❌ stub | ❌ stub | ❌ fails at list | ✅ `linkBucket` |
+| EMAIL | ✅ | ✅ (MINIO/S3 landing) | ✅ | ✅ `registerEmailSource` |
+| WHATSAPP | ❌ | ✅ (if landing works) | ⚠️ publishes jobs, no reader | Webhook service |
 
 ---
 
@@ -525,7 +639,7 @@ STORAGE_PROVIDER, MINIO_*, AWS_*, KAFKA_BROKER, IMAP_POLL_MAILBOX (optional)
   region: string
   kmsServiceId: string
   vaultToken: string          // AES-256-GCM encrypted (decrypted at worker)
-  channelType: 'FTP' | 'S3' | 'MINIO' | 'EMAIL' | ...
+  channelType: 'FTP' | 'SFTP' | 'S3' | 'MINIO' | 'AZURE' | 'EMAIL' | ...
   scheduledAt: string         // ISO timestamp
   insuranceCompanyCode?: string
   emailAddress?: string       // EMAIL channels only
@@ -553,40 +667,51 @@ For a channel to be polled, all of the following must be true:
 1. Row in `Ingestion_Channel_Master` with `is_onboarded = true`
 2. `kms_service_id` set to Key Vault service ID
 3. `vault_token_encrypted` set (org vault API key, encrypted with `APP_ENCRYPTION_KEY`)
-4. **Object storage:** Vault secret with `{ provider: 'FTP'|'MINIO'|... }` + connection fields
+4. **Object storage:** Vault secret with `{ provider: 'FTP'|'SFTP'|'MINIO'|... }` where `provider` **matches** DB `channel_type`
 5. **Email:** Vault secret with `{ email, password, imap_host, imap_port }`; run backfill script if migrating from legacy `Email_Source_Master`
-6. poll-orchestrator running with correct `STORAGE_PROVIDER` + landing bucket env
-7. Kafka, Redis, Postgres, Key Vault all reachable
+6. Source files follow the correct path convention for the provider (6 vs 7 segments)
+7. poll-orchestrator running with correct `STORAGE_PROVIDER` + landing bucket env
+8. Kafka, Redis, Postgres, Key Vault all reachable
 
 ---
 
 ## Troubleshooting
 
-| Symptom | Where to look |
-|---------|---------------|
-| No jobs published | `Ingestion_Channel_Master` — check `is_onboarded`, `kms_service_id`, `vault_token_encrypted`; scheduler logs |
-| Job published but no files | Key Vault secrets; `listNewFiles` driver logs; source path/key conventions |
-| Files listed but skipped | Redis dedup keys (`file:dedup:*`) — may already be `processing` or `processed` |
-| Upload fails | `STORAGE_PROVIDER` and landing env vars on orchestrator process |
-| Email re-processes same mail | `last_processed_uid` / `imap_uidvalidity` in DB |
-| Downstream doesn't see files | `ingestion-events` topic — published by storage-core, not orchestrator |
-| First poll delayed after restart | Expected — scheduler waits `POLL_INTERVAL_MS` before first cycle |
+| Symptom | Likely cause | Where to look |
+|---------|--------------|---------------|
+| No jobs published | Channel not onboarded or missing KMS/vault token | `Ingestion_Channel_Master`, scheduler logs |
+| `No provider credential found` | Vault `provider` ≠ DB `channel_type` | Key Vault secrets vs channel row |
+| Job published but no files | Path doesn't match segment rules | [Source path conventions](#source-path-conventions) |
+| SFTP lists 0 files | Wrong `bucket` root or inaccessible dirs | `[sftp-reader]` logs, `credentials.bucket` |
+| Files listed but skipped | Redis dedup key exists | `file:dedup:*` keys in Redis |
+| Upload fails | Wrong landing env | `STORAGE_PROVIDER`, `MINIO_*` / `AWS_*` |
+| GCP channel fails at list | GCP reader still stub | [Provider support matrix](#provider-support-matrix) |
+| Azure upload fails | Azure writer stub (reader works) | Set `STORAGE_PROVIDER=MINIO` or `S3` for landing |
+| Email re-processes mail | Stale/missing cursor | `last_processed_uid`, `imap_uidvalidity` |
+| `ingestion-events` missing | Kafka down after upload | storage-core logs (upload succeeds, event fails) |
+| First poll delayed after restart | Expected | Scheduler waits `POLL_INTERVAL_MS` before first cycle |
+| Credentials in logs | Debug `console.log` in worker | `pool.ts` — gate/remove for production |
 
 ---
 
 ## Known Gaps
 
 1. **No immediate poll on startup** — first cycle waits `POLL_INTERVAL_MS`.
-2. **WHATSAPP channel type** appears in types/dedup but there is no WHATSAPP reader in storage-core; WhatsApp uses webhooks instead.
-3. **SFTP** can be stored in Vault but storage-core has no SFTP driver — polls fail at driver resolution.
-4. **`listNewFiles` lists everything** — for large buckets/FTP trees, every cycle re-lists all files; Redis dedup prevents re-upload but not re-listing cost.
-5. **Legacy models** (`channel.model.ts`, `email-source.model.ts`) are initialized in `db.ts` but the scheduler uses unified `IngestionChannelModel` only.
-6. **ingestion-events consumer** is not part of poll-orchestrator — a separate downstream service must consume landed-file events.
-7. **Source vs landing credentials are separate** — a common onboarding mistake is pointing landing env at the TPA bucket.
+2. **WHATSAPP** — scheduler can publish jobs, but no WHATSAPP reader in storage-core; WhatsApp uses webhooks in `whatsapp-to-ftp-server`.
+3. **GCP** — reader and writer both stub.
+4. **Azure** — reader works, **writer stub** (can list/read source but landing write fails if `STORAGE_PROVIDER=AZURE`).
+5. **MinIO vs FTP path mismatch** — 6 vs 7 segment conventions.
+6. **`listNewFiles` lists everything** — for large buckets/FTP trees, every cycle re-lists all files; Redis dedup prevents re-upload but not re-listing cost.
+7. **Debug credential logging** — worker prints `sourceCredentials` JSON.
+8. **Legacy models** (`channel.model.ts`, `email-source.model.ts`) initialized in `db.ts` but unused by scheduler.
+9. **ingestion-events consumer** — not part of poll-orchestrator; a separate downstream service must consume landed-file events.
+10. **Source vs landing credentials are separate** — a common onboarding mistake is pointing landing env at the TPA bucket.
 
 ---
 
 ## Project Structure
+
+### poll-orchestrator
 
 ```
 src/
@@ -609,4 +734,30 @@ src/
     ├── crypto.ts                     # AES-256-GCM encrypt/decrypt
     ├── dedupKey.ts                   # Redis dedup key builder
     └── vault-client.ts               # Key Vault HTTP client
+```
+
+### storage-core (dependency)
+
+```
+src/
+├── index.ts              # Public exports: listNewFiles, readFromSource, writeToLanding
+├── reader.ts             # Driver resolution
+├── writer.ts             # Landing write + Kafka publish
+├── types.ts              # ReadInput, WriteInput, FileDescriptor, etc.
+├── kafka-client.ts       # ingestion-events producer
+└── drivers/
+    ├── reader/
+    │   ├── ftp.reader.ts      # basic-ftp, 7-segment paths
+    │   ├── sftp.reader.ts     # ssh2-sftp-client, 7-segment paths
+    │   ├── minio.reader.ts    # 6-segment paths
+    │   ├── s3.reader.ts       # 7-segment paths
+    │   ├── azure.reader.ts    # 7-segment paths
+    │   ├── gcp.reader.ts      # stub
+    │   ├── email.reader.ts    # IMAP + buffered content
+    │   └── email-utils/
+    └── writer/
+        ├── minio.writer.ts    # putObject
+        ├── s3.writer.ts       # multipart Upload
+        ├── gcp.writer.ts      # stub
+        └── azure.writer.ts    # stub
 ```

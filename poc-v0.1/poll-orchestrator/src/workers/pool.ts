@@ -78,7 +78,7 @@ async function handlePollJob(job: PollJobMessage): Promise<void> {
     ...(credSecret.value as Record<string, unknown>),
     insuranceCompanyCode,
   }
-  console.log('[poll-worker] sourceCredentials:', JSON.stringify(sourceCredentials, null, 2))
+  // console.log('[poll-worker] sourceCredentials:', JSON.stringify(sourceCredentials, null, 2))
   const sourceChannel = sourceChannelForType(job.channelType)
 
   const files = await listNewFiles({

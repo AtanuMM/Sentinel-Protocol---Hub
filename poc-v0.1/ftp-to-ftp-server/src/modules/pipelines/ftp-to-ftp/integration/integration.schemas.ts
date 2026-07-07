@@ -4,8 +4,6 @@ export const linkBucketBodySchema = {
     "orgId",
     "insurance_company_code",
     "zone",
-    "username",
-    "password",
     "kmsServiceId",
   ],
   properties: {
@@ -22,6 +20,8 @@ export const linkBucketBodySchema = {
     ftpPort: { type: "number" },
     secure: { type: "boolean" },
     provider: { type: "string", enum: ["FTP", "MINIO", "S3", "GCP", "AZURE", "SFTP"] },
+    projectId: { type: "string" },
+    google_application_credentials: { type: "object" },
   },
 };
 
