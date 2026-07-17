@@ -1,9 +1,9 @@
-import { EmailSourceModel } from "../../../../infra/db";
+import { IngestionChannelModel } from "../../../../infra/db";
 import { AppError } from "../../../../errors/appError";
 import { config } from "../../../../config";
 import { encryptText } from "../../../../utils/crypto";
 import { vaultClient } from "../../../../utils/vault-client";
-import { EmailSourceRepository } from "../../../../repositories/emailSource.repository";
+import { IngestionChannelRepository } from "../../../../repositories/ingestionChannel.repository";
 import { getMaxUidForMailbox } from "../integration/imap-mailbox-cursor";
 import { fetchInboxPreview, type PreviewMessagePayload } from "../integration/imap-inbox-preview";
 import { resolveRegisteredImapCredentials } from "../integration/vault-imap-resolve";
@@ -17,6 +17,7 @@ import type {
 export interface RegisterEmailSourceResult {
   email: string;
   orgId: string;
+  insuranceCompanyCode: string;
   /** IMAP UID cursor stored at registration (max UID in mailbox when watermark used). */
   lastProcessedUid: number;
 }
@@ -39,8 +40,8 @@ export interface EmailSourceImapStatus {
 export interface EmailSourceListItem {
   email: string;
   serviceId: string;
-  zoneId: string;
-  isActive: boolean;
+  insuranceCompanyCode: string;
+  isOnboarded: boolean;
   lastProcessedUid: number;
   createdAt: string;
   updatedAt: string;
@@ -53,13 +54,13 @@ export interface ListEmailSourcesResult {
 }
 
 export class ProvisioningService {
-  constructor(private readonly emailSourceRepository: EmailSourceRepository) {}
+  constructor(private readonly channelRepository: IngestionChannelRepository) {}
   /**
-   * Registers a new email source by:
+   * Registers a new email channel by:
    * 1. Probing the IMAP credentials against the mail server.
    * 2. Optionally reading the current max UID in the poll mailbox (default) so `last_processed_uid` skips existing backlog.
    * 3. Storing credentials in Key Vault (single source of truth for host/port/password).
-   * 4. Persisting email, org, service id, and is_active in Postgres (no imap/vault row ids).
+   * 4. Persisting org, insurer, email, service id, and is_onboarded in Ingestion_Channel_Master.
    *
    * On DB failure after a successful Vault write, attempts to delete the
    * orphan Vault secret to keep state consistent.
@@ -68,10 +69,11 @@ export class ProvisioningService {
     input: RegisterEmailSourceInput,
     vaultToken: string,
   ): Promise<RegisterEmailSourceResult> {
-    const { orgId, serviceId, password, imapHost } = input;
+    const { orgId, serviceId, password, imapHost, insuranceCompanyCode } = input;
     const email = input.email.trim();
+    const insurerCode = insuranceCompanyCode.trim();
     const imapPort = Number(input.imapPort) || 993;
-    const zoneId = (input.zoneId && input.zoneId.trim()) || config.defaultEmailZone;
+    const region = (input.region && input.region.trim()) || config.defaultEmailZone;
 
     const connectionTest = await testImapConnection({
       host: imapHost,
@@ -126,19 +128,23 @@ export class ProvisioningService {
     }
 
     try {
-      const newSource = await EmailSourceModel.create({
+      await IngestionChannelModel.create({
         organisation_id: orgId,
-        email_address: email,
-        vault_service_id: serviceId,
-        zone_id: zoneId,
-        last_processed_uid: initialLastProcessedUid,
-        is_active: true,
+        insurance_company_code: insurerCode,
+        channel_type: "EMAIL",
+        configuration_strategy: "DEDICATED",
+        is_onboarded: true,
+        kms_service_id: serviceId,
         vault_token_encrypted: encryptText(vaultToken),
+        email_address: email,
+        last_processed_uid: initialLastProcessedUid,
+        region,
       } as never);
 
       return {
-        email: newSource.email_address,
-        orgId: newSource.organisation_id,
+        email,
+        orgId,
+        insuranceCompanyCode: insurerCode,
         lastProcessedUid: initialLastProcessedUid,
       };
     } catch (dbErr) {
@@ -151,25 +157,24 @@ export class ProvisioningService {
       if (
         dbErr instanceof Error &&
         err.name === "SequelizeUniqueConstraintError" &&
-        Array.isArray(err.errors) &&
-        err.errors.some((e) => e.path === "email_address")
+        Array.isArray(err.errors)
       ) {
         throw new AppError(
           409,
-          `Email source ${email} is already registered.`,
+          `Email channel ${email} is already registered for insurer ${insurerCode}.`,
           "EMAIL_SOURCE_ALREADY_EXISTS",
         );
       }
       throw new AppError(
         500,
-        `Failed to save email source to the master database: ${(dbErr as Error).message}`,
+        `Failed to save email channel to the master database: ${(dbErr as Error).message}`,
         "EMAIL_SOURCE_PERSIST_FAILED",
       );
     }
   }
 
   /**
-   * Lists registered email sources for an organisation. Optionally runs a live IMAP probe per row
+   * Lists registered email channels for an organisation. Optionally runs a live IMAP probe per row
    * (O(n) network calls — use sparingly).
    */
   async listEmailSourcesByOrg(
@@ -182,15 +187,15 @@ export class ProvisioningService {
       throw new AppError(400, "orgId is required.", "ORG_ID_REQUIRED");
     }
 
-    const rows = await this.emailSourceRepository.findAllByOrganisationId(trimmedOrg);
+    const rows = await this.channelRepository.findAllEmailChannelsByOrgId(trimmedOrg);
     const sources: EmailSourceListItem[] = [];
 
     for (const row of rows) {
       const base = {
         email: row.email_address,
-        serviceId: row.vault_service_id,
-        zoneId: row.zone_id,
-        isActive: row.is_active,
+        serviceId: row.kms_service_id,
+        insuranceCompanyCode: row.insurance_company_code,
+        isOnboarded: row.is_onboarded,
         lastProcessedUid: row.last_processed_uid,
         createdAt: row.createdAt.toISOString(),
         updatedAt: row.updatedAt.toISOString(),
@@ -203,7 +208,7 @@ export class ProvisioningService {
 
       try {
         const imapResult = await this.testEmailSourceConnection(
-          { email: row.email_address, serviceId: row.vault_service_id },
+          { email: row.email_address, serviceId: row.kms_service_id },
           vaultToken,
         );
         sources.push({

@@ -1,15 +1,25 @@
 import { Consumer, Kafka, Producer } from 'kafkajs'
 import { config } from './config'
 
+export type PollJobChannelType =
+  | 'FTP'
+  | 'S3'
+  | 'SFTP'
+  | 'MINIO'
+  | 'GCP'
+  | 'AZURE'
+  | 'EMAIL'
+  | 'WHATSAPP'
+
 export interface PollJobMessage {
   credId: string
   orgId: string
-  zoneId: string
+  region: string
   kmsServiceId: string
   vaultToken: string
-  channelType: 'FTP' | 'EMAIL' | 'WHATSAPP'
+  channelType: PollJobChannelType
   scheduledAt: string
-  // EMAIL only — needed because Email_Source_Master is keyed by email_address, not kms_service_id
+  insuranceCompanyCode?: string
   emailAddress?: string
 }
 

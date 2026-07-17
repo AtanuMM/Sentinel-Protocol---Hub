@@ -30,6 +30,14 @@ function requireString(c: Record<string, any>, key: string): string {
   return v.trim()
 }
 
+function requireInsuranceCompanyCode(c: Record<string, any>): string {
+  const raw = c.insuranceCompanyCode ?? c.insurance_company_code
+  if (typeof raw !== 'string' || raw.trim() === '') {
+    throw new Error('Email reader sourceCredentials.insuranceCompanyCode is missing or empty.')
+  }
+  return raw.trim()
+}
+
 function resolvePort(c: Record<string, any>): number {
   const raw = c.imap_port
   const port = typeof raw === 'number' ? raw : parseInt(String(raw), 10)
@@ -49,13 +57,14 @@ export const emailReaderDriver: ReaderDriver = {
     const lastProcessedUid = Number(
       credentials.lastProcessedUid ?? credentials.last_processed_uid ?? 0,
     )
+    const lastUidValidity =
+      typeof credentials.lastUidValidity === 'string' && credentials.lastUidValidity.trim() !== ''
+        ? credentials.lastUidValidity.trim()
+        : null
     const keywords: string[] = Array.isArray(credentials.claimKeywords)
       ? credentials.claimKeywords
       : DEFAULT_CLAIM_KEYWORDS
-    const zoneId =
-      typeof credentials.zoneId === 'string' && credentials.zoneId.trim() !== ''
-        ? credentials.zoneId.trim()
-        : 'default'
+    const insuranceCompanyCode = requireInsuranceCompanyCode(credentials)
     const bodyStoreMax = Number(credentials.bodyStoreMaxChars ?? DEFAULT_BODY_STORE_MAX_CHARS)
     const requestedMax = Number(credentials.pollMaxMessages ?? DEFAULT_POLL_MAX_MESSAGES)
     const cap = Math.min(Math.max(requestedMax, 1), DEFAULT_POLL_MAX_MESSAGES)
@@ -76,8 +85,15 @@ export const emailReaderDriver: ReaderDriver = {
 
         const searchResult = await client.search({ all: true }, { uid: true })
         const allUids = Array.isArray(searchResult) ? searchResult : []
+        // UIDs are only valid within a UIDVALIDITY generation (RFC 3501). If the observed UIDVALIDITY
+        // differs from the one stored at the last poll, the UID space was reset (mailbox recreated,
+        // GreenMail restart, etc.) and the stored cursor is meaningless — resync from 0. We only reset
+        // on a real UIDVALIDITY change, never by guessing from inbox size (which mis-fires on deletes).
+        const uidValidityChanged =
+          lastUidValidity !== null && uidValidity !== null && uidValidity !== lastUidValidity
+        const effectiveLastProcessedUid = uidValidityChanged ? 0 : lastProcessedUid
         const newUids = allUids
-          .filter((u) => u > lastProcessedUid)
+          .filter((u) => u > effectiveLastProcessedUid)
           .sort((a, b) => a - b)
           .slice(0, cap)
 
@@ -161,7 +177,7 @@ export const emailReaderDriver: ReaderDriver = {
 
           descriptors.push({
             orgId,
-            zoneId,
+            insuranceCompanyCode,
             claimFolder,
             fileName: EMAIL_TRANSCRIPT_OBJECT,
             filePath: `email://${email}/imap/${mailboxPath}/uid/${uid}/${EMAIL_TRANSCRIPT_OBJECT}`,
@@ -169,6 +185,7 @@ export const emailReaderDriver: ReaderDriver = {
             mimeType: 'application/pdf',
             emailMeta: {
               imapUid: uid,
+              uidValidity,
               rfcMessageId,
               matchedKeywords: matchedKw,
               isTranscript: true,
@@ -195,7 +212,7 @@ export const emailReaderDriver: ReaderDriver = {
 
             descriptors.push({
               orgId,
-              zoneId,
+              insuranceCompanyCode,
               claimFolder,
               fileName: safeAttachmentName,
               filePath: `email://${email}/imap/${mailboxPath}/uid/${uid}/${pdf.filename}`,
@@ -203,6 +220,7 @@ export const emailReaderDriver: ReaderDriver = {
               mimeType: pdf.mimeType || 'application/pdf',
               emailMeta: {
                 imapUid: uid,
+                uidValidity,
                 rfcMessageId,
                 matchedKeywords: matchedKw,
                 isTranscript: false,

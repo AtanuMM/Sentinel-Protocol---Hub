@@ -7,17 +7,10 @@ import { gcpWriterDriver } from './drivers/writer/gcp.writer'
 import { minioWriterDriver } from './drivers/writer/minio.writer'
 import { s3WriterDriver } from './drivers/writer/s3.writer'
 
-const EMAIL_LANDING_ROOT = 'claims'
-
 function buildObjectKey(input: WriteInput): string {
   const date = new Date().toISOString().split('T')[0]
   const channel = input.sourceChannel.toLowerCase().replace('_ingestion', '')
-
-  if (input.sourceChannel === 'EMAIL_INGESTION') {
-    return `${input.orgId}/${EMAIL_LANDING_ROOT}/${date}/${channel}/${input.contextFolder}/${input.fileName}`
-  }
-
-  return `${input.orgId}/${input.zoneId}/${date}/${channel}/${input.contextFolder}/${input.fileName}`
+  return `${input.orgId}/${input.insuranceCompanyCode}/${date}/${channel}/${input.contextFolder}/${input.fileName}`
 }
 
 function buildKafkaPayload(input: WriteInput, result: TransferResult): KafkaEventPayload {
@@ -25,7 +18,7 @@ function buildKafkaPayload(input: WriteInput, result: TransferResult): KafkaEven
     eventId: randomUUID(),
     timestamp: new Date().toISOString(),
     orgId: input.orgId,
-    zoneId: input.zoneId,
+    insuranceCompanyCode: input.insuranceCompanyCode,
     sourceChannel: input.sourceChannel,
     payload: {
       fileName: input.fileName,

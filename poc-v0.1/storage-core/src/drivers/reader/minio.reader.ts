@@ -30,20 +30,36 @@ function parseMinioEndpoint(endpoint: string): { endPoint: string; port: number;
   return { endPoint: trimmed, port: 80, useSSL: false }
 }
 
+function requireInsuranceCompanyCode(c: Record<string, any>, ctx: string): string {
+  const raw = c.insuranceCompanyCode ?? c.insurance_company_code
+  if (typeof raw !== 'string' || raw.trim() === '') {
+    throw new Error(`MinIO reader sourceCredentials.insuranceCompanyCode is missing or empty (${ctx}).`)
+  }
+  return raw.trim()
+}
+
 function fileDescriptorFromObjectKey(
   key: string,
   orgId: string,
+  insuranceCompanyCode: string,
   size: number,
 ): FileDescriptor | null {
   const parts = key.split('/').filter(Boolean)
   if (parts.length < 6) return null
-  const zoneId = parts[1]
   const claimFolder = parts[4]
   const fileName = parts[parts.length - 1]
-  if (!zoneId || !claimFolder || !fileName) return null
+  if (!claimFolder || !fileName) return null
   const lower = fileName.toLowerCase()
   const mimeType = lower.endsWith('.pdf') ? 'application/pdf' : 'application/octet-stream'
-  return { orgId, zoneId, claimFolder, fileName, filePath: key, fileSizeBytes: size, mimeType }
+  return {
+    orgId,
+    insuranceCompanyCode,
+    claimFolder,
+    fileName,
+    filePath: key,
+    fileSizeBytes: size,
+    mimeType,
+  }
 }
 
 function listObjectsRecursive(client: Minio.Client, bucket: string, prefix: string): Promise<BucketItem[]> {
@@ -64,6 +80,7 @@ export const minioReaderDriver: ReaderDriver = {
     const accessKey = requireString(credentials, 'access_key', `orgId ${orgId}`)
     const secretKey = requireString(credentials, 'secret_key', `orgId ${orgId}`)
     const bucket = requireString(credentials, 'bucket', `orgId ${orgId}`)
+    const insuranceCompanyCode = requireInsuranceCompanyCode(credentials, `orgId ${orgId}`)
 
     const { endPoint, port, useSSL } = parseMinioEndpoint(endpoint)
     const client = new Minio.Client({
@@ -79,7 +96,7 @@ export const minioReaderDriver: ReaderDriver = {
     for (const obj of objects) {
       if (!obj.name || obj.name.endsWith('/')) continue
       const size = typeof obj.size === 'number' ? obj.size : 0
-      const fd = fileDescriptorFromObjectKey(obj.name, orgId, size)
+      const fd = fileDescriptorFromObjectKey(obj.name, orgId, insuranceCompanyCode, size)
       if (fd) out.push(fd)
     }
     return out

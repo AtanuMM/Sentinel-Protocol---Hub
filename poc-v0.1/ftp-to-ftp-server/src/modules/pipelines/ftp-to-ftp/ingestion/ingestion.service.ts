@@ -40,7 +40,7 @@ export class IngestionService {
     const pathParts = sourcePath.split("/");
     if (pathParts.length < 4) throw new AppError(400, "Invalid Path Structure", "INVALID_PATH");
 
-    const [orgId, zoneId, folderDate] = pathParts;
+    const [orgId, insuranceCompanyCode, folderDate] = pathParts;
     const today = new Date().toISOString().split("T")[0];
     if (folderDate !== today) throw new AppError(400, "Stale Date Partition", "STALE_DATE");
 
@@ -50,11 +50,16 @@ export class IngestionService {
       return { status: "ignored", reason: "duplicate" };
     }
 
-    const channel = await this.repository.findByOrgId(orgId);
+    const channel = await this.repository.findByOrgIdInsurerAndChannel(
+      orgId,
+      insuranceCompanyCode,
+      "FTP",
+    );
     if (!channel) throw new AppError(403, "Channel Not Registered", "CHANNEL_UNREGISTERED");
+    if (!channel.region) throw new AppError(500, "Channel is missing region.", "CHANNEL_MISCONFIGURED");
 
     const traceId = randomUUID();
-    const landingPath = `${orgId}/${zoneId}/${today}/raw/${traceId}.pdf`;
+    const landingPath = `${orgId}/${insuranceCompanyCode}/${today}/raw/${traceId}.pdf`;
 
     try {
       const dataStream = await minioClient.getObject(sourceBucket, sourcePath);
@@ -66,7 +71,7 @@ export class IngestionService {
         schemaVersion: 1,
         traceId,
         orgId,
-        zoneId,
+        zoneId: channel.region,
         landingPath,
         originalPath: sourcePath,
         timestamp: new Date().toISOString(),

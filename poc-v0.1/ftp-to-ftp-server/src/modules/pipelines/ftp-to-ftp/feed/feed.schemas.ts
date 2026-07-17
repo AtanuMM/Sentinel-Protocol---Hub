@@ -4,6 +4,8 @@ export const ingestionChannelRowSchema = {
   type: "object",
   properties: {
     organisation_id: { type: "string" },
+    insurance_company_code: { type: "string" },
+    configuration_strategy: { type: "string", enum: ["DEDICATED", "SHARED"] },
     source_prefix: { type: "string" },
     source_bucket: { type: "string" },
     external_username: { type: "string" },

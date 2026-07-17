@@ -16,27 +16,44 @@ function joinPosix(dir: string, name: string): string {
   return `${d}/${name}`
 }
 
+function requireInsuranceCompanyCode(c: Record<string, any>, ctx: string): string {
+  const raw = c.insuranceCompanyCode ?? c.insurance_company_code
+  if (typeof raw !== 'string' || raw.trim() === '') {
+    throw new Error(`FTP sourceCredentials.insuranceCompanyCode is missing or empty (${ctx}).`)
+  }
+  return raw.trim()
+}
+
 /** Path: /Health_Claims/{TPA}/{YYYY}/{MM_Month}/{CLM-...}/{filename} */
 function fileDescriptorFromParts(
   parts: string[],
   orgId: string,
+  insuranceCompanyCode: string,
   filePath: string,
   fileSizeBytes: number,
 ): FileDescriptor | null {
-  if (parts.length < 6) return null
-  const zoneId = parts[1]
-  const claimFolder = parts[4]
+  if (parts.length < 7) return null
+  const claimFolder = parts[5]
   const fileName = parts[parts.length - 1]
-  if (!zoneId || !claimFolder || !fileName) return null
+  if (!claimFolder || !fileName) return null
   const lower = fileName.toLowerCase()
   const mimeType = lower.endsWith('.pdf') ? 'application/pdf' : 'application/octet-stream'
-  return { orgId, zoneId, claimFolder, fileName, filePath, fileSizeBytes, mimeType }
+  return {
+    orgId,
+    insuranceCompanyCode,
+    claimFolder,
+    fileName,
+    filePath,
+    fileSizeBytes,
+    mimeType,
+  }
 }
 
 async function walkFtpTree(
   client: Client,
   dir: string,
   orgId: string,
+  insuranceCompanyCode: string,
   out: FileDescriptor[],
 ): Promise<void> {
   const list = await client.list(dir)
@@ -45,10 +62,16 @@ async function walkFtpTree(
     if (name === '.' || name === '..') continue
     const fullPath = joinPosix(dir, name)
     if (ent.type === FileType.Directory) {
-      await walkFtpTree(client, fullPath, orgId, out)
+      await walkFtpTree(client, fullPath, orgId, insuranceCompanyCode, out)
     } else if (ent.type === FileType.File) {
       const parts = fullPath.split('/').filter(Boolean)
-      const fd = fileDescriptorFromParts(parts, orgId, fullPath.startsWith('/') ? fullPath : `/${fullPath}`, ent.size)
+      const fd = fileDescriptorFromParts(
+        parts,
+        orgId,
+        insuranceCompanyCode,
+        fullPath.startsWith('/') ? fullPath : `/${fullPath}`,
+        ent.size,
+      )
       if (fd) out.push(fd)
     }
   }
@@ -59,6 +82,7 @@ export const ftpReaderDriver: ReaderDriver = {
     const host = requireString(credentials, 'host', `orgId ${orgId}`)
     const user = requireString(credentials, 'user', `orgId ${orgId}`)
     const password = requireString(credentials, 'password', `orgId ${orgId}`)
+    const insuranceCompanyCode = requireInsuranceCompanyCode(credentials, `orgId ${orgId}`)
     const port = typeof credentials.port === 'number' && Number.isFinite(credentials.port) ? credentials.port : 21
 
     let secure: boolean | 'implicit' = false
@@ -69,11 +93,13 @@ export const ftpReaderDriver: ReaderDriver = {
     }
 
     const client = new Client()
-    const root = '/'
+    const root = typeof credentials.bucket === 'string' && credentials.bucket.trim() !== ''
+      ? '/' + credentials.bucket.trim().replace(/^\//, '')
+      : '/'
     const out: FileDescriptor[] = []
     try {
       await client.access({ host, port, user, password, secure })
-      await walkFtpTree(client, root, orgId, out)
+      await walkFtpTree(client, root, orgId, insuranceCompanyCode, out)
       return out
     } finally {
       void client.close()

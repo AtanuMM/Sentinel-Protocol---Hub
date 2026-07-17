@@ -4,7 +4,7 @@ import pLimit from 'p-limit'
 import { Readable } from 'stream'
 import { config } from '../config'
 import { getConsumer, type PollJobMessage } from '../kafka'
-import { EmailSource } from '../models/email-source.model'
+import { IngestionChannelRepository } from '../repositories/ingestionChannel.repository'
 import { getRedisClient } from '../redis'
 import { decryptText } from '../utils/crypto'
 import { buildDedupKey, type PipelineSource } from '../utils/dedupKey'
@@ -13,16 +13,32 @@ import { vaultClient, type VaultSecretListItem } from '../utils/vault-client'
 const WORKER_GROUP_ID = 'poll-orchestrator-workers'
 const EMAIL_SOURCE_CHANNEL = 'EMAIL_INGESTION'
 
+const ingestionChannelRepository = new IngestionChannelRepository()
+
 let activeConsumer: Awaited<ReturnType<typeof getConsumer>> | undefined
 
 function sourceChannelForType(channelType: PollJobMessage['channelType']): string {
-  if (channelType === 'FTP') {
-    return 'FTP_INGESTION'
+  if (channelType === 'EMAIL') return EMAIL_SOURCE_CHANNEL
+  if (channelType === 'WHATSAPP') return 'WHATSAPP_INGESTION'
+  return 'FTP_INGESTION'
+}
+
+function sourceTypeForChannelType(channelType: PollJobMessage['channelType']): PipelineSource {
+  switch (channelType) {
+    case 'FTP':
+    case 'SFTP':
+    case 'S3':
+    case 'MINIO':
+    case 'GCP':
+    case 'AZURE':
+      return 'ftp'
+    case 'WHATSAPP':
+      return 'whatsapp'
+    case 'EMAIL':
+      return 'email'
+    default:
+      return 'ftp'
   }
-  if (channelType === 'EMAIL') {
-    return EMAIL_SOURCE_CHANNEL
-  }
-  return 'WHATSAPP_INGESTION'
 }
 
 async function handlePollJob(job: PollJobMessage): Promise<void> {
@@ -39,14 +55,30 @@ async function handlePollJob(job: PollJobMessage): Promise<void> {
   }
 
   const credSecret = secrets.find(
-    (s) => typeof s.value === 'object' && s.value !== null && 'provider' in s.value
+    (s) =>
+      typeof s.value === 'object' &&
+      s.value !== null &&
+      'provider' in s.value &&
+      (s.value as Record<string, unknown>).provider === job.channelType
   )
   if (!credSecret) {
     console.error(`[poll-worker] No provider credential found for orgId ${job.orgId}`)
     return
   }
 
-  const sourceCredentials = credSecret.value as Record<string, unknown>
+  const insuranceCompanyCode = job.insuranceCompanyCode
+  if (!insuranceCompanyCode) {
+    console.error(
+      `[poll-worker] ${job.channelType} job for orgId ${job.orgId} is missing insuranceCompanyCode; cannot build landing path.`,
+    )
+    return
+  }
+
+  const sourceCredentials = {
+    ...(credSecret.value as Record<string, unknown>),
+    insuranceCompanyCode,
+  }
+  // console.log('[poll-worker] sourceCredentials:', JSON.stringify(sourceCredentials, null, 2))
   const sourceChannel = sourceChannelForType(job.channelType)
 
   const files = await listNewFiles({
@@ -78,7 +110,7 @@ async function handlePollJob(job: PollJobMessage): Promise<void> {
 
     await writeToLanding(stream, {
       orgId: job.orgId,
-      zoneId: file.zoneId,
+      insuranceCompanyCode: file.insuranceCompanyCode,
       contextFolder: file.claimFolder,
       fileName: file.fileName,
       mimeType: file.mimeType,
@@ -88,7 +120,7 @@ async function handlePollJob(job: PollJobMessage): Promise<void> {
   }
 
   const redis = getRedisClient()
-  const sourceType: PipelineSource = job.channelType === 'FTP' ? 'ftp' : 'whatsapp'
+  const sourceType: PipelineSource = sourceTypeForChannelType(job.channelType)
 
   const limit = pLimit(config.pollConcurrency)
   await Promise.all(
@@ -98,7 +130,7 @@ async function handlePollJob(job: PollJobMessage): Promise<void> {
         const dedupKey = buildDedupKey(
           sourceType,
           job.orgId,
-          file.filePath.split('/')[1] ?? '',
+          insuranceCompanyCode,
           file.filePath
         )
 
@@ -137,6 +169,14 @@ async function handleEmailJob(job: PollJobMessage, secrets: VaultSecretListItem[
     return
   }
 
+  const insuranceCompanyCode = job.insuranceCompanyCode
+  if (!insuranceCompanyCode) {
+    console.error(
+      `[poll-worker] EMAIL job for orgId ${job.orgId} is missing insuranceCompanyCode; cannot resolve channel row.`,
+    )
+    return
+  }
+
   const picked = secrets.find(
     (s) =>
       typeof s.value === 'object' &&
@@ -151,17 +191,25 @@ async function handleEmailJob(job: PollJobMessage, secrets: VaultSecretListItem[
 
   // Fresh cursor from DB — never trust a stale value from the job message, since multiple poll
   // cycles for the same source could be in flight.
-  const row = await EmailSource.findByPk(email)
+  const row = await ingestionChannelRepository.findByOrgIdInsurerAndChannel(
+    job.orgId,
+    insuranceCompanyCode,
+    'EMAIL',
+  )
   if (!row) {
-    console.error(`[poll-worker] Email source ${email} not found in Email_Source_Master; skipping.`)
+    console.error(
+      `[poll-worker] Email channel ${email} not found in Ingestion_Channel_Master; skipping.`,
+    )
     return
   }
 
   const sourceCredentials: Record<string, unknown> = {
     ...(picked.value as Record<string, unknown>),
     provider: 'EMAIL',
-    lastProcessedUid: row.last_processed_uid,
-    zoneId: row.zone_id,
+    insuranceCompanyCode,
+    lastProcessedUid: row.last_processed_uid ?? 0,
+    lastUidValidity: row.imap_uidvalidity,
+    region: row.region ?? 'eu-central-1',
   }
 
   const descriptors = await listNewFiles({
@@ -194,7 +242,7 @@ async function handleEmailJob(job: PollJobMessage, secrets: VaultSecretListItem[
         try {
           await writeToLanding(Readable.from(buf), {
             orgId: job.orgId,
-            zoneId: descriptor.zoneId,
+            insuranceCompanyCode: descriptor.insuranceCompanyCode,
             contextFolder: descriptor.claimFolder,
             fileName: descriptor.fileName,
             mimeType: descriptor.mimeType,
@@ -216,9 +264,31 @@ async function handleEmailJob(job: PollJobMessage, secrets: VaultSecretListItem[
   // in this batch after attempting all writes. (Part 1's reader only returns matched UIDs, so the best
   // available high-water mark is max(emailMeta.imapUid) across the returned descriptors.)
   const maxUid = descriptors.reduce((acc, d) => Math.max(acc, d.emailMeta?.imapUid ?? 0), 0)
-  if (maxUid > row.last_processed_uid) {
-    await EmailSource.update({ last_processed_uid: maxUid }, { where: { email_address: email } })
-    console.log(`[poll-worker] Advanced last_processed_uid to ${maxUid} for ${email}`)
+  const observedUidValidity =
+    descriptors.find((d) => d.emailMeta?.uidValidity != null)?.emailMeta?.uidValidity ?? null
+
+  // Persist the UIDVALIDITY generation alongside the cursor. When UIDVALIDITY changed (mailbox reset),
+  // the reader resynced from 0, so maxUid may be LOWER than the stored cursor — we must adopt it as the
+  // new generation's watermark, otherwise the same batch reprocesses every cycle. When UIDVALIDITY is
+  // unchanged, advance the cursor only forward (standard high-water-mark semantics).
+  const updates: { last_processed_uid?: number; imap_uidvalidity?: string } = {}
+  const uidValidityChanged =
+    observedUidValidity !== null && observedUidValidity !== row.imap_uidvalidity
+  if (uidValidityChanged) {
+    updates.imap_uidvalidity = observedUidValidity
+    if (maxUid > 0) updates.last_processed_uid = maxUid
+  } else {
+    if (maxUid > (row.last_processed_uid ?? 0)) updates.last_processed_uid = maxUid
+    if (observedUidValidity !== null && row.imap_uidvalidity === null) {
+      updates.imap_uidvalidity = observedUidValidity
+    }
+  }
+
+  if (Object.keys(updates).length > 0) {
+    await ingestionChannelRepository.updateEmailCursor(job.orgId, insuranceCompanyCode, updates)
+    console.log(
+      `[poll-worker] Persisted cursor for ${email}: ${JSON.stringify(updates)}`,
+    )
   }
 }
 

@@ -1,4 +1,4 @@
-import { EmailSourceModel } from "../../../../infra/db";
+import { IngestionChannelRepository } from "../../../../repositories/ingestionChannel.repository";
 import { AppError } from "../../../../errors/appError";
 import { vaultClient, type VaultSecretListItem } from "../../../../utils/vault-client";
 
@@ -38,30 +38,32 @@ export interface ResolvedImapCredentials {
   pass: string;
 }
 
+const channelRepository = new IngestionChannelRepository();
+
 /**
- * Loads registered email row + Vault secret (value.email match) and returns IMAP login parameters.
+ * Loads registered EMAIL channel row + Vault secret (value.email match) and returns IMAP login parameters.
  */
 export async function resolveRegisteredImapCredentials(
   email: string,
   serviceId: string,
   vaultToken: string,
 ): Promise<ResolvedImapCredentials> {
-  const row = await EmailSourceModel.findByPk(email);
+  const row = await channelRepository.findByEmailAndServiceId(email, serviceId);
   if (!row) {
-    throw new AppError(404, "Email source not found in master database.", "EMAIL_SOURCE_NOT_FOUND");
+    throw new AppError(404, "Email channel not found in master database.", "EMAIL_SOURCE_NOT_FOUND");
   }
 
-  if (row.vault_service_id !== serviceId) {
+  if (row.kms_service_id !== serviceId) {
     throw new AppError(
       403,
-      "serviceId does not match the registered email source.",
+      "serviceId does not match the registered email channel.",
       "SERVICE_ID_MISMATCH",
     );
   }
 
   let items: VaultSecretListItem[];
   try {
-    items = await vaultClient.listSecretsForService(row.vault_service_id, vaultToken);
+    items = await vaultClient.listSecretsForService(row.kms_service_id!, vaultToken);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     throw new AppError(502, `Failed to read credentials from Vault: ${msg}`, "VAULT_FETCH_FAILED");

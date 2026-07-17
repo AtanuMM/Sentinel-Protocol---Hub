@@ -7,21 +7,39 @@ import { decryptText, encryptText } from "../../../../utils/crypto";
 export class ProvisioningService {
   constructor(private readonly repository: IngestionChannelRepository) {}
 
-  async initToday(orgId: string, zone: string): Promise<{ message: string; path: string }> {
+  async initToday(
+    orgId: string,
+    insuranceCompanyCode: string,
+  ): Promise<{ message: string; path: string }> {
     const today = new Date().toISOString().split("T")[0];
-    const targetFolder = `${orgId}/${zone}/${today}/`;
+    const targetFolder = `${orgId}/${insuranceCompanyCode}/${today}/`;
     const markerFile = `${targetFolder}.sentinel_ready`;
 
-    const channel = await this.repository.findByOrgId(orgId);
+    const channel = await this.repository.findByOrgIdAndInsurer(orgId, insuranceCompanyCode);
     if (!channel) throw new AppError(404, "Organisation not found. Please link credentials first.", "NOT_FOUND");
     if (!channel.is_onboarded) throw new AppError(403, "Please initialize org hierarchy first.", "NOT_ONBOARDED");
+
+    if (channel.channel_type !== "MINIO") {
+      return {
+        message: `Daily partition marker not applicable for provider ${channel.channel_type}.`,
+        path: targetFolder,
+      };
+    }
+
+    if (!channel.source_bucket || !channel.external_username || !channel.external_password_encrypted) {
+      throw new AppError(500, "Channel is missing object-storage credentials.", "CHANNEL_MISCONFIGURED");
+    }
 
     let decryptedSecret = channel.external_password_encrypted;
     const isLegacyPlaintext = (channel.external_password_encrypted.match(/:/g) ?? []).length !== 2;
     if (!isLegacyPlaintext) {
       decryptedSecret = decryptText(channel.external_password_encrypted);
     } else {
-      await this.repository.updateEncryptedPassword(orgId, encryptText(channel.external_password_encrypted));
+      await this.repository.updateEncryptedPassword(
+        orgId,
+        insuranceCompanyCode,
+        encryptText(channel.external_password_encrypted),
+      );
     }
 
     const tpaClient = new Minio.Client({
@@ -33,7 +51,10 @@ export class ProvisioningService {
     });
 
     try {
-      await tpaClient.statObject(channel.source_bucket, `${orgId}/${zone}/.sentinel_root`);
+      await tpaClient.statObject(
+        channel.source_bucket,
+        `${orgId}/${insuranceCompanyCode}/.sentinel_root`,
+      );
     } catch {
       throw new AppError(500, "The parent folder structure was deleted in MinIO. Please re-onboard.", "ROOT_MISSING");
     }

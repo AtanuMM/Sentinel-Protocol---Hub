@@ -5,9 +5,11 @@ type LinkBucketRequest = FastifyRequest<{
   Headers: { "x-vault-token": string };
   Body: {
     orgId: string;
+    insurance_company_code: string;
+    configuration_strategy?: "DEDICATED" | "SHARED";
     zone: string;
-    username: string;
-    password: string;
+    username?: string;
+    password?: string;
     bucketName: string;
     region?: string;
     kmsServiceId: string;
@@ -15,6 +17,8 @@ type LinkBucketRequest = FastifyRequest<{
     ftpPort?: number;
     secure?: boolean;
     provider?: string;
+    projectId?: string;
+    google_application_credentials?: Record<string, unknown>;
   };
 }>;
 

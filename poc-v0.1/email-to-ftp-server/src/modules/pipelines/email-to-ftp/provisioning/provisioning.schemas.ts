@@ -1,11 +1,12 @@
 export const registerEmailSourceBodySchema = {
   type: "object",
-  required: ["orgId", "serviceId", "email", "password", "imapHost"],
+  required: ["orgId", "serviceId", "insuranceCompanyCode", "email", "password", "imapHost"],
   additionalProperties: false,
   properties: {
     orgId: { type: "string", minLength: 1 },
     serviceId: { type: "string", minLength: 1 },
-    zoneId: { type: "string", minLength: 1 },
+    insuranceCompanyCode: { type: "string", minLength: 1 },
+    region: { type: "string", minLength: 1 },
     email: { type: "string", minLength: 1 },
     password: { type: "string", minLength: 1 },
     imapHost: { type: "string", minLength: 1 },
@@ -29,7 +30,8 @@ export const registerEmailSourceHeadersSchema = {
 export interface RegisterEmailSourceInput {
   orgId: string;
   serviceId: string;
-  zoneId?: string;
+  insuranceCompanyCode: string;
+  region?: string;
   email: string;
   password: string;
   imapHost: string;
@@ -80,10 +82,11 @@ export const registerEmailSourceResponseSchema = {
     message: { type: "string" },
     data: {
       type: "object",
-      required: ["email", "orgId", "lastProcessedUid"],
+      required: ["email", "orgId", "insuranceCompanyCode", "lastProcessedUid"],
       properties: {
         email: { type: "string" },
         orgId: { type: "string" },
+        insuranceCompanyCode: { type: "string" },
         lastProcessedUid: {
           type: "integer",
           description: "Initial IMAP UID cursor (max UID in mailbox when watermark is used; 0 if disabled or empty mailbox).",
@@ -171,12 +174,12 @@ export const emailSourceImapStatusSchema = {
 
 export const emailSourceListItemSchema = {
   type: "object",
-  required: ["email", "serviceId", "zoneId", "isActive", "lastProcessedUid", "createdAt", "updatedAt", "imap"],
+  required: ["email", "serviceId", "insuranceCompanyCode", "isOnboarded", "lastProcessedUid", "createdAt", "updatedAt", "imap"],
   properties: {
     email: { type: "string" },
     serviceId: { type: "string" },
-    zoneId: { type: "string" },
-    isActive: { type: "boolean" },
+    insuranceCompanyCode: { type: "string" },
+    isOnboarded: { type: "boolean" },
     lastProcessedUid: { type: "integer" },
     createdAt: { type: "string" },
     updatedAt: { type: "string" },

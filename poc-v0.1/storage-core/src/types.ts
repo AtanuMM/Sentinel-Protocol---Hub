@@ -12,7 +12,7 @@ export interface ReadInput {
 
 export interface WriteInput {
   orgId: string
-  zoneId: string
+  insuranceCompanyCode: string
   contextFolder: string
   fileName: string
   mimeType: string
@@ -22,7 +22,7 @@ export interface WriteInput {
 
 export interface FileDescriptor {
   orgId: string
-  zoneId: string
+  insuranceCompanyCode: string
   claimFolder: string
   fileName: string
   filePath: string
@@ -31,6 +31,8 @@ export interface FileDescriptor {
   // Email-specific (optional — only populated by email.reader.ts)
   emailMeta?: {
     imapUid: number
+    /** Mailbox UIDVALIDITY observed during this scan; UIDs are only meaningful within this value (RFC 3501). */
+    uidValidity: string | null
     rfcMessageId: string | null
     matchedKeywords: string[]
     isTranscript: boolean
@@ -53,7 +55,7 @@ export interface KafkaEventPayload {
   eventId: string
   timestamp: string
   orgId: string
-  zoneId: string
+  insuranceCompanyCode: string
   sourceChannel: string
   payload: {
     fileName: string
