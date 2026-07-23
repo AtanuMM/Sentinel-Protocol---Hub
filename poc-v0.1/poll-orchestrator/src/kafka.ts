@@ -20,6 +20,7 @@ export interface PollJobMessage {
   channelType: PollJobChannelType
   scheduledAt: string
   insuranceCompanyCode?: string
+  sourcePrefix?: string
   emailAddress?: string
 }
 

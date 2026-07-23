@@ -5,6 +5,7 @@ import { Readable } from 'stream'
 import { config } from '../config'
 import { getConsumer, type PollJobMessage } from '../kafka'
 import { IngestionChannelRepository } from '../repositories/ingestionChannel.repository'
+import { IngestionLogRepository } from '../repositories/ingestionLog.repository'
 import { getRedisClient } from '../redis'
 import { decryptText } from '../utils/crypto'
 import { buildDedupKey, type PipelineSource } from '../utils/dedupKey'
@@ -14,6 +15,7 @@ const WORKER_GROUP_ID = 'poll-orchestrator-workers'
 const EMAIL_SOURCE_CHANNEL = 'EMAIL_INGESTION'
 
 const ingestionChannelRepository = new IngestionChannelRepository()
+const ingestionLogRepository = new IngestionLogRepository()
 
 let activeConsumer: Awaited<ReturnType<typeof getConsumer>> | undefined
 
@@ -41,6 +43,37 @@ function sourceTypeForChannelType(channelType: PollJobMessage['channelType']): P
   }
 }
 
+function buildLandingPath(
+  orgId: string,
+  file: FileDescriptor,
+  sourceChannel: string,
+): string {
+  const date = new Date().toISOString().split('T')[0]
+  const channel = sourceChannel.toLowerCase().replace('_ingestion', '')
+  return `${orgId}/${file.insuranceCompanyCode}/${date}/${channel}/${file.claimFolder}/${file.fileName}`
+}
+
+async function createIngestionLog(
+  job: PollJobMessage,
+  file: FileDescriptor,
+  landingPath: string,
+  status: 'SUCCESS' | 'FAILED',
+  errorMessage?: string,
+): Promise<void> {
+  await ingestionLogRepository.createLog({
+    org_id: job.orgId,
+    insurance_company_code: file.insuranceCompanyCode,
+    channel_type: job.channelType,
+    source_path: file.filePath,
+    landing_path: landingPath,
+    file_name: file.fileName,
+    file_size_bytes: file.fileSizeBytes,
+    status,
+    error_message: errorMessage,
+    ingested_at: new Date(),
+  })
+}
+
 async function handlePollJob(job: PollJobMessage): Promise<void> {
   const plainVaultToken = decryptText(job.vaultToken)
 
@@ -59,10 +92,15 @@ async function handlePollJob(job: PollJobMessage): Promise<void> {
       typeof s.value === 'object' &&
       s.value !== null &&
       'provider' in s.value &&
-      (s.value as Record<string, unknown>).provider === job.channelType
+      (s.value as Record<string, unknown>).provider === job.channelType &&
+      (job.channelType === 'MINIO' || s.keyName === job.credId)
   )
   if (!credSecret) {
-    console.error(`[poll-worker] No provider credential found for orgId ${job.orgId}`)
+    console.error(
+      job.channelType === 'MINIO'
+        ? `[poll-worker] No MINIO credential found for orgId ${job.orgId}`
+        : `[poll-worker] No exact credential "${job.credId}" found for orgId ${job.orgId}`,
+    )
     return
   }
 
@@ -74,11 +112,18 @@ async function handlePollJob(job: PollJobMessage): Promise<void> {
     return
   }
 
-  const sourceCredentials = {
+  if (job.channelType !== 'MINIO' && typeof job.sourcePrefix !== 'string') {
+    console.error(
+      `[poll-worker] ${job.channelType} job for orgId ${job.orgId} is missing sourcePrefix; refusing to scan with ambiguous tenant scope.`,
+    )
+    return
+  }
+
+  const sourceCredentials: Record<string, unknown> = {
     ...(credSecret.value as Record<string, unknown>),
     insuranceCompanyCode,
+    ...(job.channelType === 'MINIO' ? {} : { source_prefix: job.sourcePrefix }),
   }
-  // console.log('[poll-worker] sourceCredentials:', JSON.stringify(sourceCredentials, null, 2))
   const sourceChannel = sourceChannelForType(job.channelType)
 
   const files = await listNewFiles({
@@ -91,13 +136,21 @@ async function handlePollJob(job: PollJobMessage): Promise<void> {
   })
 
   if (files.length === 0) {
-    console.log(`[poll-worker] No new files for orgId ${job.orgId}`)
+    const sourcePrefix =
+      typeof sourceCredentials.source_prefix === 'string'
+        ? sourceCredentials.source_prefix
+        : ''
+    console.error(
+      `[poll-worker] Source scan returned no matching files for orgId ${job.orgId}, ` +
+        `provider ${job.channelType}, source_prefix "${sourcePrefix}". ` +
+        'Verify the FTP path, permissions, and that the directory contains files.',
+    )
     return
   }
 
   console.log(`[poll-worker] ${files.length} files found for orgId ${job.orgId}`)
 
-  const transferFile = async (file: FileDescriptor): Promise<void> => {
+  const transferFile = async (file: FileDescriptor): Promise<string> => {
     const stream = await readFromSource({
       orgId: job.orgId,
       sourceCredentials,
@@ -108,7 +161,7 @@ async function handlePollJob(job: PollJobMessage): Promise<void> {
       filePath: file.filePath,
     })
 
-    await writeToLanding(stream, {
+    const result = await writeToLanding(stream, {
       orgId: job.orgId,
       insuranceCompanyCode: file.insuranceCompanyCode,
       contextFolder: file.claimFolder,
@@ -117,6 +170,7 @@ async function handlePollJob(job: PollJobMessage): Promise<void> {
       fileSizeBytes: file.fileSizeBytes,
       sourceChannel,
     })
+    return result.objectKey
   }
 
   const redis = getRedisClient()
@@ -141,16 +195,27 @@ async function handlePollJob(job: PollJobMessage): Promise<void> {
           return
         }
 
+        const expectedLandingPath = buildLandingPath(job.orgId, file, sourceChannel)
+        let landingPath: string
         try {
-          await transferFile(file)
-          // Step 2: mark as processed with long TTL
-          await redis.set(dedupKey, 'processed', 'EX', config.dedupTtlSec)
-          console.log(`[poll-worker] ✅ ${file.fileName} uploaded for orgId ${job.orgId}`)
+          landingPath = await transferFile(file)
         } catch (err) {
           // Step 3: release lock on failure so next cycle can retry
-          await redis.del(dedupKey)
-          console.error(`[poll-worker] ❌ Failed ${file.fileName} for orgId ${job.orgId}:`, err)
+          const error = err instanceof Error ? err : new Error(String(err))
+          await Promise.all([
+            redis.del(dedupKey),
+            createIngestionLog(job, file, expectedLandingPath, 'FAILED', error.message),
+          ])
+          console.error(`[poll-worker] ❌ Failed ${file.fileName} for orgId ${job.orgId}:`, error)
+          return
         }
+
+        // Step 2: mark as processed with long TTL
+        await Promise.all([
+          redis.set(dedupKey, 'processed', 'EX', config.dedupTtlSec),
+          createIngestionLog(job, file, landingPath, 'SUCCESS'),
+        ])
+        console.log(`[poll-worker] ✅ ${file.fileName} uploaded for orgId ${job.orgId}`)
       })
     )
   )
@@ -234,13 +299,30 @@ async function handleEmailJob(job: PollJobMessage, secrets: VaultSecretListItem[
   await Promise.all(
     descriptors.map((descriptor) =>
       limit(async () => {
+        const expectedLandingPath = buildLandingPath(
+          job.orgId,
+          descriptor,
+          EMAIL_SOURCE_CHANNEL,
+        )
         const buf = descriptor.emailMeta?.bufferedContent
         if (!buf) {
+          const error = new Error(
+            `Descriptor ${descriptor.fileName} for ${email} has no buffered content.`,
+          )
+          await createIngestionLog(
+            job,
+            descriptor,
+            expectedLandingPath,
+            'FAILED',
+            error.message,
+          )
           console.error(`[poll-worker] Descriptor ${descriptor.fileName} for ${email} has no buffered content; skipping.`)
           return
         }
+
+        let landingPath: string
         try {
-          await writeToLanding(Readable.from(buf), {
+          const result = await writeToLanding(Readable.from(buf), {
             orgId: job.orgId,
             insuranceCompanyCode: descriptor.insuranceCompanyCode,
             contextFolder: descriptor.claimFolder,
@@ -249,11 +331,23 @@ async function handleEmailJob(job: PollJobMessage, secrets: VaultSecretListItem[
             fileSizeBytes: descriptor.fileSizeBytes,
             sourceChannel: EMAIL_SOURCE_CHANNEL,
           })
-          console.log(`[poll-worker] ✅ ${descriptor.fileName} uploaded for ${email} (orgId ${job.orgId})`)
+          landingPath = result.objectKey
         } catch (err) {
           // Per-descriptor isolation so one bad attachment does not block the rest of the batch.
-          console.error(`[poll-worker] ❌ Failed ${descriptor.fileName} for ${email} (orgId ${job.orgId}):`, err)
+          const error = err instanceof Error ? err : new Error(String(err))
+          await createIngestionLog(
+            job,
+            descriptor,
+            expectedLandingPath,
+            'FAILED',
+            error.message,
+          )
+          console.error(`[poll-worker] ❌ Failed ${descriptor.fileName} for ${email} (orgId ${job.orgId}):`, error)
+          return
         }
+
+        await createIngestionLog(job, descriptor, landingPath, 'SUCCESS')
+        console.log(`[poll-worker] ✅ ${descriptor.fileName} uploaded for ${email} (orgId ${job.orgId})`)
       })
     )
   )

@@ -13,15 +13,21 @@ async function runCycle(): Promise<void> {
 
     for (const channel of channels) {
       const kmsServiceId = channel.kms_service_id!
+      const channelType = channel.channel_type as PollJobChannelType
+      const credId =
+        channelType === 'MINIO'
+          ? `${channel.organisation_id}:${kmsServiceId}`
+          : `${channelType.toLowerCase()}:${channel.organisation_id}:${channel.insurance_company_code}`
       const message: PollJobMessage = {
-        credId: `${channel.organisation_id}:${kmsServiceId}`,
+        credId,
         orgId: channel.organisation_id,
         insuranceCompanyCode: channel.insurance_company_code,
         region: channel.region ?? 'eu-central-1',
         kmsServiceId,
         vaultToken: channel.vault_token_encrypted!,
-        channelType: channel.channel_type as PollJobChannelType,
+        channelType,
         scheduledAt: new Date().toISOString(),
+        ...(channelType === 'MINIO' ? {} : { sourcePrefix: channel.source_prefix ?? '' }),
       }
       await publishPollJob(message)
       published++

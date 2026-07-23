@@ -12,6 +12,7 @@ interface LinkBucketInput {
   username?: string;
   password?: string;
   bucketName?: string;
+  sourcePath?: string;
   region?: string;
   kmsServiceId: string;
   vaultToken: string;
@@ -31,8 +32,14 @@ function resolveBucketName(provider: string, bucketName?: string): string {
   return normalized ?? bucketName ?? "";
 }
 
+function normalizeSourcePath(sourcePath?: string): string {
+  const normalized = sourcePath?.trim().replace(/^\/+/, "") ?? "";
+  return normalized && !normalized.endsWith("/") ? `${normalized}/` : normalized;
+}
+
 function buildCredentialValue(input: LinkBucketInput): Record<string, unknown> {
   const provider = (input.provider ?? "FTP").toUpperCase();
+  const source_prefix = normalizeSourcePath(input.sourcePath);
 
   switch (provider) {
     case "MINIO":
@@ -43,6 +50,7 @@ function buildCredentialValue(input: LinkBucketInput): Record<string, unknown> {
         secret_key: input.password,
         bucket: input.bucketName,
         secure: input.secure ?? false,
+        source_prefix,
       };
     case "S3":
       return {
@@ -51,6 +59,7 @@ function buildCredentialValue(input: LinkBucketInput): Record<string, unknown> {
         access_key: input.username,
         secret_key: input.password,
         bucket: input.bucketName,
+        source_prefix,
       };
     case "GCP":
       return {
@@ -58,6 +67,7 @@ function buildCredentialValue(input: LinkBucketInput): Record<string, unknown> {
         project_id: input.projectId,
         bucket_name: input.bucketName,
         google_application_credentials: input.google_application_credentials,
+        source_prefix,
       };
     case "AZURE":
       return {
@@ -65,6 +75,7 @@ function buildCredentialValue(input: LinkBucketInput): Record<string, unknown> {
         account_name: input.username,
         account_key: input.password,
         container: input.bucketName,
+        source_prefix,
       };
     case "SFTP":
       return {
@@ -75,6 +86,7 @@ function buildCredentialValue(input: LinkBucketInput): Record<string, unknown> {
         password: input.password,
         secure: input.secure ?? false,
         bucket: input.bucketName,
+        source_prefix,
       };
     case "FTP":
     default:
@@ -86,6 +98,7 @@ function buildCredentialValue(input: LinkBucketInput): Record<string, unknown> {
         password: input.password,
         secure: input.secure ?? false,
         bucket: input.bucketName,
+        source_prefix,
       };
   }
 }
@@ -131,6 +144,7 @@ export class IntegrationService {
     }
 
     const bucketName = resolveBucketName(provider, input.bucketName);
+    const sourcePrefix = normalizeSourcePath(input.sourcePath);
     const prefix = `${input.orgId}/${input.insurance_company_code}/`;
     const rootMarker = `${prefix}.sentinel_root`;
 
@@ -158,21 +172,21 @@ export class IntegrationService {
         keyName = `ftp:${input.orgId}`;
         break;
       case "S3":
-        keyName = `s3:${input.orgId}`;
+        keyName = `s3:${input.orgId}:${input.insurance_company_code}`;
         break;
       case "GCP":
-        keyName = `gcp:${input.orgId}`;
+        keyName = `gcp:${input.orgId}:${input.insurance_company_code}`;
         break;
       case "AZURE":
-        keyName = `azure:${input.orgId}`;
+        keyName = `azure:${input.orgId}:${input.insurance_company_code}`;
         break;
       case "SFTP":
-        keyName = `sftp:${input.orgId}`;
+        keyName = `sftp:${input.orgId}:${input.insurance_company_code}`;
         break;
       default:
-        keyName = `ftp:${input.orgId}`;
+        keyName = `ftp:${input.orgId}:${input.insurance_company_code}`;
     }
-    const credentialValue = buildCredentialValue({ ...input, bucketName });
+    const credentialValue = buildCredentialValue({ ...input, bucketName, sourcePath: sourcePrefix });
     await vaultClient.storeSecret(
       {
         serviceId: input.kmsServiceId,
@@ -187,7 +201,7 @@ export class IntegrationService {
       insurance_company_code: input.insurance_company_code,
       channel_type: provider,
       configuration_strategy: input.configuration_strategy ?? "DEDICATED",
-      source_prefix: prefix,
+      source_prefix: sourcePrefix,
       source_bucket: bucketName,
       external_username: input.username ?? "",
       external_password_encrypted: encryptText(input.password ?? ""),

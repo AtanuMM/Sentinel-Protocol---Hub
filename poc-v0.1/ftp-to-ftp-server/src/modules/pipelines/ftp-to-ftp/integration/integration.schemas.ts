@@ -14,6 +14,7 @@ export const linkBucketBodySchema = {
     username: { type: "string", minLength: 1 },
     password: { type: "string", minLength: 1 },
     bucketName: { type: "string" },
+    sourcePath: { type: "string" },
     region: { type: "string" },
     kmsServiceId: { type: "string", minLength: 1 },
     ftpHost: { type: "string", minLength: 1 },

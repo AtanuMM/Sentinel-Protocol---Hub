@@ -16,6 +16,10 @@ function joinPosix(dir: string, name: string): string {
   return `${d}/${name}`
 }
 
+function normalizeFtpPath(path: string): string {
+  return path.trim().replace(/^\/+/, '').replace(/\/+$/, '')
+}
+
 function requireInsuranceCompanyCode(c: Record<string, any>, ctx: string): string {
   const raw = c.insuranceCompanyCode ?? c.insurance_company_code
   if (typeof raw !== 'string' || raw.trim() === '') {
@@ -24,7 +28,6 @@ function requireInsuranceCompanyCode(c: Record<string, any>, ctx: string): strin
   return raw.trim()
 }
 
-/** Path: /Health_Claims/{TPA}/{YYYY}/{MM_Month}/{CLM-...}/{filename} */
 function fileDescriptorFromParts(
   parts: string[],
   orgId: string,
@@ -32,8 +35,8 @@ function fileDescriptorFromParts(
   filePath: string,
   fileSizeBytes: number,
 ): FileDescriptor | null {
-  if (parts.length < 7) return null
-  const claimFolder = parts[5]
+  if (parts.length < 2) return null
+  const claimFolder = parts[parts.length - 2]
   const fileName = parts[parts.length - 1]
   if (!claimFolder || !fileName) return null
   const lower = fileName.toLowerCase()
@@ -54,6 +57,7 @@ async function walkFtpTree(
   dir: string,
   orgId: string,
   insuranceCompanyCode: string,
+  sourcePrefix: string,
   out: FileDescriptor[],
 ): Promise<void> {
   const list = await client.list(dir)
@@ -62,9 +66,20 @@ async function walkFtpTree(
     if (name === '.' || name === '..') continue
     const fullPath = joinPosix(dir, name)
     if (ent.type === FileType.Directory) {
-      await walkFtpTree(client, fullPath, orgId, insuranceCompanyCode, out)
+      await walkFtpTree(client, fullPath, orgId, insuranceCompanyCode, sourcePrefix, out)
     } else if (ent.type === FileType.File) {
-      const parts = fullPath.split('/').filter(Boolean)
+      const normalizedFullPath = normalizeFtpPath(fullPath)
+      if (
+        sourcePrefix &&
+        normalizedFullPath !== sourcePrefix &&
+        !normalizedFullPath.startsWith(`${sourcePrefix}/`)
+      ) {
+        continue
+      }
+      const relativePath = sourcePrefix
+        ? normalizedFullPath.slice(sourcePrefix.length)
+        : normalizedFullPath
+      const parts = relativePath.split('/').filter(Boolean)
       const fd = fileDescriptorFromParts(
         parts,
         orgId,
@@ -83,6 +98,10 @@ export const ftpReaderDriver: ReaderDriver = {
     const user = requireString(credentials, 'user', `orgId ${orgId}`)
     const password = requireString(credentials, 'password', `orgId ${orgId}`)
     const insuranceCompanyCode = requireInsuranceCompanyCode(credentials, `orgId ${orgId}`)
+    const sourcePrefix =
+      typeof credentials.source_prefix === 'string'
+        ? normalizeFtpPath(credentials.source_prefix)
+        : ''
     const port = typeof credentials.port === 'number' && Number.isFinite(credentials.port) ? credentials.port : 21
 
     let secure: boolean | 'implicit' = false
@@ -93,13 +112,15 @@ export const ftpReaderDriver: ReaderDriver = {
     }
 
     const client = new Client()
-    const root = typeof credentials.bucket === 'string' && credentials.bucket.trim() !== ''
-      ? '/' + credentials.bucket.trim().replace(/^\//, '')
-      : '/'
+    const configuredRoot =
+      typeof credentials.bucket === 'string' && credentials.bucket.trim() !== ''
+        ? `/${normalizeFtpPath(credentials.bucket)}`
+        : '/'
+    const root = sourcePrefix ? `/${sourcePrefix}` : configuredRoot
     const out: FileDescriptor[] = []
     try {
       await client.access({ host, port, user, password, secure })
-      await walkFtpTree(client, root, orgId, insuranceCompanyCode, out)
+      await walkFtpTree(client, root, orgId, insuranceCompanyCode, sourcePrefix, out)
       return out
     } finally {
       void client.close()

@@ -20,13 +20,15 @@ function requireInsuranceCompanyCode(c: Record<string, any>, ctx: string): strin
 
 function fileDescriptorFromObjectKey(
   key: string,
+  sourcePrefix: string,
   orgId: string,
   insuranceCompanyCode: string,
   size: number,
 ): FileDescriptor | null {
-  const parts = key.split('/').filter(Boolean)
-  if (parts.length < 7) return null
-  const claimFolder = parts[5]
+  const relativePath = sourcePrefix ? key.slice(sourcePrefix.length) : key
+  const parts = relativePath.split('/').filter(Boolean)
+  if (parts.length < 2) return null
+  const claimFolder = parts[parts.length - 2]
   const fileName = parts[parts.length - 1]
   if (!claimFolder || !fileName) return null
   const lower = fileName.toLowerCase()
@@ -88,13 +90,22 @@ export const s3ReaderDriver: ReaderDriver = {
   async listNewFiles(orgId: string, credentials: Record<string, any>): Promise<FileDescriptor[]> {
     const bucket = requireString(credentials, 'bucket', `orgId ${orgId}`)
     const insuranceCompanyCode = requireInsuranceCompanyCode(credentials, `orgId ${orgId}`)
+    const sourcePrefix =
+      typeof credentials.source_prefix === 'string' ? credentials.source_prefix : ''
     const client = createS3Client(credentials, `orgId ${orgId}`)
 
     const objects = await listObjectsRecursive(client, bucket)
     const out: FileDescriptor[] = []
     for (const obj of objects) {
       if (obj.Key.endsWith('/')) continue
-      const fd = fileDescriptorFromObjectKey(obj.Key, orgId, insuranceCompanyCode, obj.Size)
+      if (sourcePrefix && !obj.Key.startsWith(sourcePrefix)) continue
+      const fd = fileDescriptorFromObjectKey(
+        obj.Key,
+        sourcePrefix,
+        orgId,
+        insuranceCompanyCode,
+        obj.Size,
+      )
       if (fd) out.push(fd)
     }
     return out

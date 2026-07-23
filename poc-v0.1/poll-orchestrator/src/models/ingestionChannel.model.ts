@@ -8,6 +8,7 @@ export class IngestionChannel extends Model {
   declare channel_type: string
   declare configuration_strategy: ConfigurationStrategy
   declare is_onboarded: boolean
+  declare service_running_status: string | null
   declare kms_service_id: string | null
   declare vault_token_encrypted: string | null
   declare source_prefix: string | null
@@ -34,6 +35,7 @@ export const initIngestionChannelModel = (sequelize: Sequelize): typeof Ingestio
         defaultValue: 'DEDICATED',
       },
       is_onboarded: { type: DataTypes.BOOLEAN, defaultValue: false },
+      service_running_status: { type: DataTypes.STRING, allowNull: true },
       kms_service_id: { type: DataTypes.STRING, allowNull: true },
       vault_token_encrypted: { type: DataTypes.TEXT, allowNull: true },
       source_prefix: { type: DataTypes.STRING, allowNull: true },

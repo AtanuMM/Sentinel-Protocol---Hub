@@ -24,7 +24,6 @@ function requireInsuranceCompanyCode(c: Record<string, any>, ctx: string): strin
   return raw.trim()
 }
 
-/** Path: /Health_Claims/{TPA}/{YYYY}/{MM_Month}/{CLM-...}/{filename} */
 function fileDescriptorFromParts(
   parts: string[],
   orgId: string,
@@ -32,8 +31,8 @@ function fileDescriptorFromParts(
   filePath: string,
   fileSizeBytes: number,
 ): FileDescriptor | null {
-  if (parts.length < 7) return null
-  const claimFolder = parts[5]
+  if (parts.length < 2) return null
+  const claimFolder = parts[parts.length - 2]
   const fileName = parts[parts.length - 1]
   if (!claimFolder || !fileName) return null
   const lower = fileName.toLowerCase()
@@ -54,6 +53,7 @@ async function walkSftpTree(
   dir: string,
   orgId: string,
   insuranceCompanyCode: string,
+  sourcePrefix: string,
   out: FileDescriptor[],
 ): Promise<void> {
   try {
@@ -63,10 +63,11 @@ async function walkSftpTree(
       if (name === '.' || name === '..') continue
       const fullPath = joinPosix(dir, name)
       if (ent.type === 'd') {
-        await walkSftpTree(client, fullPath, orgId, insuranceCompanyCode, out)
+        await walkSftpTree(client, fullPath, orgId, insuranceCompanyCode, sourcePrefix, out)
       } else if (ent.type === '-') {
-        const parts = fullPath.split('/').filter(Boolean)
-        // console.log('[sftp-reader] found file:', fullPath, 'parts:', fullPath.split('/').filter(Boolean))
+        if (sourcePrefix && !fullPath.startsWith(sourcePrefix)) continue
+        const relativePath = sourcePrefix ? fullPath.slice(sourcePrefix.length) : fullPath
+        const parts = relativePath.split('/').filter(Boolean)
         const fd = fileDescriptorFromParts(
           parts,
           orgId,
@@ -90,18 +91,18 @@ export const sftpReaderDriver: ReaderDriver = {
     const user = requireString(credentials, 'user', `orgId ${orgId}`)
     const password = requireString(credentials, 'password', `orgId ${orgId}`)
     const insuranceCompanyCode = requireInsuranceCompanyCode(credentials, `orgId ${orgId}`)
+    const sourcePrefix =
+      typeof credentials.source_prefix === 'string' ? credentials.source_prefix : ''
     const port = typeof credentials.port === 'number' && Number.isFinite(credentials.port) ? credentials.port : 22
 
     const client = new SftpClient()
     const bucket = typeof credentials.bucket === 'string' ? credentials.bucket.trim().replace(/^\//, '') : ''
     const out: FileDescriptor[] = []
     try {
-      console.log('[sftp-reader] connecting to:', host, port, 'bucket:', bucket)
       await client.connect({ host, port, username: user, password })
       const cwd = await client.cwd()
       const root = bucket ? `${cwd}/${bucket}` : cwd
-      console.log('[sftp-reader] connected, cwd:', cwd, 'resolved root:', root)
-      await walkSftpTree(client, root, orgId, insuranceCompanyCode, out)
+      await walkSftpTree(client, root, orgId, insuranceCompanyCode, sourcePrefix, out)
       return out
     } finally {
       void client.end()

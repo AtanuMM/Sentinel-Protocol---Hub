@@ -39,7 +39,14 @@ export class IngestionChannelRepository {
   /** EMAIL channels eligible for polling (replaces EmailSource.findActiveForPolling). */
   async findActiveEmailChannelsForPolling(): Promise<IngestionChannel[]> {
     const rows = await IngestionChannelModel.findAll({
-      where: { channel_type: 'EMAIL', is_onboarded: true },
+      where: {
+        channel_type: 'EMAIL',
+        is_onboarded: true,
+        [Op.or]: [
+          { service_running_status: 'LIVE' },
+          { service_running_status: null },
+        ],
+      },
     })
     return rows.filter(
       (c) => Boolean(c.kms_service_id?.trim()) && Boolean(c.vault_token_encrypted?.trim()),
@@ -49,7 +56,14 @@ export class IngestionChannelRepository {
   /** Non-EMAIL object-storage channels eligible for polling (FTP, S3, SFTP, etc.). */
   async findActiveObjectStorageChannelsForPolling(): Promise<IngestionChannel[]> {
     const rows = await IngestionChannelModel.findAll({
-      where: { is_onboarded: true, channel_type: { [Op.ne]: 'EMAIL' } },
+      where: {
+        is_onboarded: true,
+        channel_type: { [Op.ne]: 'EMAIL' },
+        [Op.or]: [
+          { service_running_status: 'LIVE' },
+          { service_running_status: null },
+        ],
+      },
     })
     return rows.filter(
       (c) => Boolean(c.kms_service_id?.trim()) && Boolean(c.vault_token_encrypted?.trim()),
