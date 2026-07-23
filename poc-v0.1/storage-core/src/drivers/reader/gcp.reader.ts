@@ -60,13 +60,15 @@ function parseFileSize(raw: unknown): number {
 
 function fileDescriptorFromObjectName(
   name: string,
+  sourcePrefix: string,
   orgId: string,
   insuranceCompanyCode: string,
   size: number,
 ): FileDescriptor | null {
-  const parts = name.split('/').filter(Boolean)
-  if (parts.length < 7) return null
-  const claimFolder = parts[5]
+  const relativePath = sourcePrefix ? name.slice(sourcePrefix.length) : name
+  const parts = relativePath.split('/').filter(Boolean)
+  if (parts.length < 2) return null
+  const claimFolder = parts[parts.length - 2]
   const fileName = parts[parts.length - 1]
   if (!claimFolder || !fileName) return null
   const lower = fileName.toLowerCase()
@@ -126,13 +128,22 @@ export const gcpReaderDriver: ReaderDriver = {
     requireString(credentials, 'project_id', `orgId ${orgId}`)
     requireCredentialsObject(credentials, `orgId ${orgId}`)
     const insuranceCompanyCode = requireInsuranceCompanyCode(credentials, `orgId ${orgId}`)
+    const sourcePrefix =
+      typeof credentials.source_prefix === 'string' ? credentials.source_prefix : ''
     const storage = createGcsClient(credentials, `orgId ${orgId}`)
 
     const objects = await listGcsObjects(storage, bucketName)
     const out: FileDescriptor[] = []
     for (const obj of objects) {
       if (obj.name.endsWith('/')) continue
-      const fd = fileDescriptorFromObjectName(obj.name, orgId, insuranceCompanyCode, obj.size)
+      if (sourcePrefix && !obj.name.startsWith(sourcePrefix)) continue
+      const fd = fileDescriptorFromObjectName(
+        obj.name,
+        sourcePrefix,
+        orgId,
+        insuranceCompanyCode,
+        obj.size,
+      )
       if (fd) out.push(fd)
     }
     return out

@@ -11,7 +11,9 @@ const assertDependencies = async () => {
   await sequelize.authenticate();
   await redisClient.ping();
   await producer.connect();
-  await minioClient.listBuckets();
+  if (process.env.STORAGE_PROVIDER?.toUpperCase() === "MINIO") {
+    await minioClient.listBuckets();
+  }
 };
 
 const closeResources = async () => {

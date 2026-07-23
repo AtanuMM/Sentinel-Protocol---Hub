@@ -28,20 +28,29 @@ let pollIntervalId: ReturnType<typeof setInterval> | undefined;
 
 function pickSourceCredentialsFromVaultList(
   items: VaultSecretListItem[],
-  orgId: string,
+  channel: IngestionChannel,
 ): Record<string, any> {
+  const provider = channel.channel_type.toUpperCase();
+  const expectedKeyName =
+    `${provider.toLowerCase()}:${channel.organisation_id}:${channel.insurance_company_code}`;
+
   for (const item of items) {
     const v = item.value;
     if (v && typeof v === "object" && !Array.isArray(v)) {
       const rec = v as Record<string, unknown>;
       const p = rec.provider;
-      if (typeof p === "string" && p.trim() !== "") {
+      if (
+        p === provider &&
+        (provider === "MINIO" || item.keyName === expectedKeyName)
+      ) {
         return rec as Record<string, any>;
       }
     }
   }
   throw new Error(
-    `No KMS secret with an object value containing a non-empty string "provider" (orgId=${orgId}).`,
+    provider === "MINIO"
+      ? `No MINIO credential found for orgId=${channel.organisation_id}.`
+      : `No exact KMS credential "${expectedKeyName}" found for orgId=${channel.organisation_id}.`,
   );
 }
 
@@ -51,7 +60,13 @@ async function runPollCycle(app: FastifyInstance, channel: IngestionChannel): Pr
   const vaultTokenPlain = decryptText(channel.vault_token_encrypted!);
 
   const secrets = await vaultClient.listSecretsForService(serviceId, vaultTokenPlain);
-  const sourceCredentials = pickSourceCredentialsFromVaultList(secrets, orgId);
+  const sourceCredentials = {
+    ...pickSourceCredentialsFromVaultList(secrets, channel),
+    insuranceCompanyCode: channel.insurance_company_code,
+    ...(channel.channel_type === "MINIO"
+      ? {}
+      : { source_prefix: channel.source_prefix ?? "" }),
+  };
 
   const files = await listNewFiles({
     orgId,
@@ -91,7 +106,7 @@ async function runPollCycle(app: FastifyInstance, channel: IngestionChannel): Pr
           });
           await writeToLanding(stream, {
             orgId: file.orgId,
-            zoneId: file.zoneId,
+            insuranceCompanyCode: file.insuranceCompanyCode,
             contextFolder: file.claimFolder,
             fileName: file.fileName,
             mimeType: file.mimeType,
