@@ -124,6 +124,8 @@ async function handlePollJob(job: PollJobMessage): Promise<void> {
     insuranceCompanyCode,
     ...(job.channelType === 'MINIO' ? {} : { source_prefix: job.sourcePrefix }),
   }
+
+  console.log('sourceCredentials line 128 pool.ts>>>>>>>>>>>>>>>>>>', sourceCredentials)
   const sourceChannel = sourceChannelForType(job.channelType)
 
   const files = await listNewFiles({
@@ -276,6 +278,8 @@ async function handleEmailJob(job: PollJobMessage, secrets: VaultSecretListItem[
     lastUidValidity: row.imap_uidvalidity,
     region: row.region ?? 'eu-central-1',
   }
+
+  console.log('sourceCredentials line 282 pool.ts>>>>>>>>>>>>>>>>>>', sourceCredentials)
 
   const descriptors = await listNewFiles({
     orgId: job.orgId,

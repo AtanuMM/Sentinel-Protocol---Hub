@@ -1,6 +1,6 @@
 import { buildApp } from "./app";
 import { config } from "./config";
-import { producer, redisClient, minioClient } from "./infra/clients";
+import { producer, redisClient } from "./infra/clients";
 import { sequelize } from "./infra/db";
 import type { FastifyInstance } from "fastify";
 
@@ -10,7 +10,6 @@ const assertDependencies = async () => {
   await sequelize.authenticate();
   await redisClient.ping();
   await producer.connect();
-  await minioClient.listBuckets();
 };
 
 const closeResources = async () => {

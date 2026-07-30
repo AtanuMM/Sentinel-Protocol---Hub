@@ -12,6 +12,7 @@ import UserManagement from './pages/UserManagement';
 import MDM from './pages/MDM';
 import Settings from './pages/Settings';
 import Profile from './pages/Profile';
+import AddChannels from './pages/AddChannels';
 
 // Placeholders
 // const Dashboard = () => <div className="text-white text-2xl font-bold">Data Influx Dashboard</div>;
@@ -34,6 +35,7 @@ function App() {
         <Route element={isAuthenticated ? <DashboardLayout /> : <Navigate to="/login" />}>
           <Route path="dashboard" element={<Dashboard />} />
           <Route path="mdm" element={<MDM />} />
+          <Route path="add-channels" element={<AddChannels />} />
           <Route path="users" element={<UserManagement />} />
           <Route path="settings" element={<Settings />} />
           <Route path="profile" element={<Profile />} />

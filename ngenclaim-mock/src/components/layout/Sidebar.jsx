@@ -1,12 +1,13 @@
 // src/components/layout/Sidebar.jsx
 import React from 'react';
 import { NavLink } from 'react-router-dom';
-import { LayoutGrid, Users, Database, Settings, UserCircle, LogOut } from 'lucide-react';
+import { LayoutGrid, Users, Database, Plus, Settings, UserCircle, LogOut } from 'lucide-react';
 
 const navItems = [
   { name: 'Dashboard', path: '/dashboard', icon: LayoutGrid },
   { name: 'User Management', path: '/users', icon: Users },
   { name: 'MDM', path: '/mdm', icon: Database },
+  { name: 'Add Channels', path: '/add-channels', icon: Plus },
   { name: 'Settings', path: '/settings', icon: Settings },
   { name: 'Profile', path: '/profile', icon: UserCircle },
 ];
