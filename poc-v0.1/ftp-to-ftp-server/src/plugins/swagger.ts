@@ -18,7 +18,8 @@ export async function registerSwagger(app: FastifyInstance): Promise<void> {
       openapi: "3.1.0",
       info: {
         title: "Sentinel Protocol — FTP-to-FTP ingestion",
-        description: "Fastify microservice for the FTP-to-FTP pipeline (MinIO webhook, provisioning, integration, feed).",
+        description:
+          "Fastify microservice for the FTP-to-FTP pipeline (MinIO webhook, provisioning, integration, feed). Protected routes require header **x-vault-token** (key-vault).",
         version: readPackageVersion(),
       },
       servers: [{ url: "/", description: "Current server" }],
@@ -30,7 +31,14 @@ export async function registerSwagger(app: FastifyInstance): Promise<void> {
         { name: openApiTags.ftpIngestion, description: "MinIO webhook ingestion." },
       ],
       components: {
-        securitySchemes: {},
+        securitySchemes: {
+          vaultToken: {
+            type: "apiKey",
+            in: "header",
+            name: "x-vault-token",
+            description: "Key vault API token (see key-vault).",
+          },
+        },
       },
     },
   });
