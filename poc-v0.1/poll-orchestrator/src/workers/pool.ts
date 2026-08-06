@@ -2,13 +2,15 @@ import { listNewFiles, readFromSource, writeToLanding } from '@sentinel/storage-
 import type { FileDescriptor } from '@sentinel/storage-core'
 import pLimit from 'p-limit'
 import { Readable } from 'stream'
-import { config } from '../config'
+import { config, buildStorageWriterConfig } from '../config'
 import { getConsumer, type PollJobMessage } from '../kafka'
 import { IngestionChannelRepository } from '../repositories/ingestionChannel.repository'
 import { IngestionLogRepository } from '../repositories/ingestionLog.repository'
 import { getRedisClient } from '../redis'
 import { decryptText } from '../utils/crypto'
 import { buildDedupKey, type PipelineSource } from '../utils/dedupKey'
+import { logPoisonMessage } from '../utils/poisonMessageLogger'
+import { validatePollJobMessage } from '../utils/pollJobValidation'
 import { vaultClient, type VaultSecretListItem } from '../utils/vault-client'
 
 const WORKER_GROUP_ID = 'poll-orchestrator-workers'
@@ -152,7 +154,18 @@ async function handlePollJob(job: PollJobMessage): Promise<void> {
 
   console.log(`[poll-worker] ${files.length} files found for orgId ${job.orgId}`)
 
+  const storageConfig = buildStorageWriterConfig()
+
   const transferFile = async (file: FileDescriptor): Promise<string> => {
+    console.log('file line 156 pool.ts>>>>>>>>>>>>>>>>>>', {
+      orgId: job.orgId,
+      sourceCredentials,
+      fileName: file.fileName,
+      mimeType: file.mimeType,
+      fileSizeBytes: file.fileSizeBytes,
+      sourceChannel,
+      filePath: file.filePath,
+    })
     const stream = await readFromSource({
       orgId: job.orgId,
       sourceCredentials,
@@ -163,7 +176,7 @@ async function handlePollJob(job: PollJobMessage): Promise<void> {
       filePath: file.filePath,
     })
 
-    const result = await writeToLanding(stream, {
+    console.log('stream line 166 pool.ts>>>>>>>>>>>>>>>>>>', {
       orgId: job.orgId,
       insuranceCompanyCode: file.insuranceCompanyCode,
       contextFolder: file.claimFolder,
@@ -172,6 +185,16 @@ async function handlePollJob(job: PollJobMessage): Promise<void> {
       fileSizeBytes: file.fileSizeBytes,
       sourceChannel,
     })
+
+    const result = await writeToLanding(stream, {
+      orgId: job.orgId,
+      insuranceCompanyCode: file.insuranceCompanyCode,
+      contextFolder: file.claimFolder,
+      fileName: file.fileName,
+      mimeType: file.mimeType,
+      fileSizeBytes: file.fileSizeBytes,
+      sourceChannel,
+    }, storageConfig)
     return result.objectKey
   }
 
@@ -299,6 +322,8 @@ async function handleEmailJob(job: PollJobMessage, secrets: VaultSecretListItem[
 
   console.log(`[poll-worker] ${descriptors.length} email descriptor(s) for ${email} (orgId ${job.orgId})`)
 
+  const storageConfig = buildStorageWriterConfig()
+
   const limit = pLimit(config.pollConcurrency)
   await Promise.all(
     descriptors.map((descriptor) =>
@@ -334,7 +359,7 @@ async function handleEmailJob(job: PollJobMessage, secrets: VaultSecretListItem[
             mimeType: descriptor.mimeType,
             fileSizeBytes: descriptor.fileSizeBytes,
             sourceChannel: EMAIL_SOURCE_CHANNEL,
-          })
+          }, storageConfig)
           landingPath = result.objectKey
         } catch (err) {
           // Per-descriptor isolation so one bad attachment does not block the rest of the batch.
@@ -400,13 +425,62 @@ export async function startWorkerPool(): Promise<void> {
 
   void consumer
     .run({
-      eachMessage: async ({ message }) => {
+      eachMessage: async ({ topic, partition, message }) => {
         await messageLimit(async () => {
+          const rawValue = message.value?.toString() ?? ''
+          const messageMeta = {
+            topic,
+            partition,
+            offset: message.offset,
+            key: message.key?.toString() ?? null,
+            timestamp: message.timestamp,
+            rawValue,
+          }
+
           try {
-            const job: PollJobMessage = JSON.parse(message.value!.toString())
-            await handlePollJob(job)
+            let parsed: unknown
+            try {
+              parsed = rawValue.length > 0 ? JSON.parse(rawValue) : null
+            } catch (parseErr) {
+              const reason =
+                parseErr instanceof Error ? parseErr.message : String(parseErr)
+              await logPoisonMessage({
+                ...messageMeta,
+                kind: 'parse',
+                reasons: [`JSON parse failed: ${reason}`],
+              })
+              console.warn(
+                `[poll-worker] Skipping poison message at ${topic}[${partition}]@${message.offset}: JSON parse failed: ${reason}`,
+              )
+              return
+            }
+
+            const validation = validatePollJobMessage(parsed)
+            if (!validation.valid) {
+              await logPoisonMessage({
+                ...messageMeta,
+                kind: 'validation',
+                reasons: validation.reasons,
+                parsedPayload: parsed,
+              })
+              console.warn(
+                `[poll-worker] Skipping poison message at ${topic}[${partition}]@${message.offset}: ${validation.reasons.join('; ')}`,
+              )
+              return
+            }
+
+            await handlePollJob(validation.job)
           } catch (err) {
-            console.error('[poll-worker] Failed to process message:', err)
+            const error = err instanceof Error ? err : new Error(String(err))
+            await logPoisonMessage({
+              ...messageMeta,
+              kind: 'processing',
+              error: error.message,
+              stack: error.stack,
+            })
+            console.warn(
+              `[poll-worker] Skipping message after unexpected error at ${topic}[${partition}]@${message.offset}: ${error.message}`,
+            )
           }
         })
       },

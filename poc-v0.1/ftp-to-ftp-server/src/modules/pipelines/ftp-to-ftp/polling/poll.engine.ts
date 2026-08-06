@@ -15,7 +15,7 @@
 import pLimit from "p-limit";
 import type { FastifyInstance } from "fastify";
 import { listNewFiles, readFromSource, writeToLanding } from "@sentinel/storage-core";
-import { config } from "../../../../config";
+import { config, buildStorageWriterConfig } from "../../../../config";
 import { redisClient } from "../../../../infra/clients";
 import type { IngestionChannel } from "../../../../models/ingestionChannel.model";
 import { IngestionChannelRepository } from "../../../../repositories/ingestionChannel.repository";
@@ -86,6 +86,7 @@ async function runPollCycle(app: FastifyInstance, channel: IngestionChannel): Pr
   }
 
   const limit = pLimit(config.pollConcurrency);
+  const storageConfig = buildStorageWriterConfig();
   await Promise.all(
     pending.map((file) =>
       limit(async () => {
@@ -112,7 +113,7 @@ async function runPollCycle(app: FastifyInstance, channel: IngestionChannel): Pr
             mimeType: file.mimeType,
             fileSizeBytes: file.fileSizeBytes,
             sourceChannel: "FTP_INGESTION",
-          });
+          }, storageConfig);
           await redisClient.set(dedupKey, "processed", "EX", config.dedupTtlSec);
         } catch (err) {
           await redisClient.del(dedupKey);

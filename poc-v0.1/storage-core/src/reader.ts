@@ -15,6 +15,15 @@ export async function listNewFiles(input: ReadInput): Promise<FileDescriptor[]> 
 }
 
 export async function readFromSource(input: ReadInput & { filePath: string }): Promise<Readable> {
+  console.log('[storage-core] readFromSource payload:', {
+    orgId: input.orgId,
+    fileName: input.fileName,
+    mimeType: input.mimeType,
+    fileSizeBytes: input.fileSizeBytes,
+    sourceChannel: input.sourceChannel,
+    filePath: input.filePath,
+    sourceCredentials: input.sourceCredentials,
+  })
   const provider = resolveProvider(input.sourceCredentials)
   const driver = resolveDriver(provider)
   return driver.readFile(input.sourceCredentials, input.filePath)

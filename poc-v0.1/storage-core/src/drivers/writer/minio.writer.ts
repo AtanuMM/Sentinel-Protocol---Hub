@@ -1,9 +1,12 @@
 import * as Minio from 'minio'
 import type { Readable } from 'stream'
-import type { TransferResult, WriteInput, WriterDriver } from '../../types'
+import type { MinioWriterConfig, TransferResult, WriteInput, WriterDriver } from '../../types'
 
-function requireEnv(name: string): string {
-  const v = process.env[name]?.trim()
+function requireConfigField(
+  value: string | undefined,
+  name: string,
+): string {
+  const v = typeof value === 'string' ? value.trim() : ''
   if (!v) {
     throw new Error(`${name} env var is not set; cannot write to Sentinel MinIO landing bucket.`)
   }
@@ -29,31 +32,34 @@ function parseMinioEndpoint(endpoint: string): { endPoint: string; port: number;
   return { endPoint: trimmed, port: 80, useSSL: false }
 }
 
-function resolveLandingMinioClientOptions(): { endPoint: string; port: number; useSSL: boolean } {
-  const raw = requireEnv('MINIO_ENDPOINT')
+function resolveLandingMinioClientOptions(
+  storageConfig: MinioWriterConfig,
+): { endPoint: string; port: number; useSSL: boolean } {
+  const raw = requireConfigField(storageConfig.endpoint, 'MINIO_ENDPOINT')
   if (/^https?:\/\//i.test(raw)) {
     return parseMinioEndpoint(raw)
   }
-  const port = parseInt(process.env.MINIO_PORT?.trim() || '9000', 10)
-  const useSSL = process.env.MINIO_USE_SSL?.trim().toLowerCase() === 'true'
+  const port = storageConfig.port ?? 9000
+  const useSSL = storageConfig.useSSL ?? false
   return { endPoint: raw, port, useSSL }
 }
 
-function landingStorageProvider(): string {
-  return process.env.STORAGE_PROVIDER?.trim().toUpperCase() || 'MINIO'
-}
-
 export const minioWriterDriver: WriterDriver = {
-  async write(stream: Readable, input: WriteInput, objectKey: string): Promise<TransferResult> {
-    const accessKey = requireEnv('MINIO_ACCESS_KEY')
-    const secretKey = requireEnv('MINIO_SECRET_KEY')
-    const bucket = requireEnv('MINIO_BUCKET')
+  async write(
+    stream: Readable,
+    input: WriteInput,
+    objectKey: string,
+    storageConfig: MinioWriterConfig,
+  ): Promise<TransferResult> {
+    const accessKey = requireConfigField(storageConfig.accessKey, 'MINIO_ACCESS_KEY')
+    const secretKey = requireConfigField(storageConfig.secretKey, 'MINIO_SECRET_KEY')
+    const bucket = requireConfigField(storageConfig.bucket, 'MINIO_BUCKET')
 
     if (!Number.isFinite(input.fileSizeBytes) || input.fileSizeBytes < 0) {
       throw new Error('fileSizeBytes must be a non-negative finite number for MinIO streaming upload.')
     }
 
-    const { endPoint, port, useSSL } = resolveLandingMinioClientOptions()
+    const { endPoint, port, useSSL } = resolveLandingMinioClientOptions(storageConfig)
     const client = new Minio.Client({
       endPoint,
       port,
@@ -64,6 +70,7 @@ export const minioWriterDriver: WriterDriver = {
 
     const metaData: Record<string, string> = {
       'Content-Type': input.mimeType,
+      ...(input.objectMetadata ?? {}),
     }
 
     await client.putObject(bucket, objectKey, stream, input.fileSizeBytes, metaData)
@@ -71,7 +78,7 @@ export const minioWriterDriver: WriterDriver = {
     return {
       objectKey,
       bucketName: bucket,
-      storageProvider: landingStorageProvider(),
+      storageProvider: storageConfig.provider,
       fileSizeBytes: input.fileSizeBytes,
     }
   },

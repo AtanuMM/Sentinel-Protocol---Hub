@@ -2,10 +2,11 @@ import { writeToLanding } from "@sentinel/storage-core";
 import axios from "axios";
 import { Consumer, Kafka } from "kafkajs";
 import { Readable } from "stream";
-import { config } from "../../../../config";
+import { config, buildStorageWriterConfig } from "../../../../config";
 import { decryptText } from "../../../../utils/crypto";
 import { findChannelByPhoneNumber } from "../../../../repositories/whatsappChannel.repository";
-import type { WhatsappRawEvent } from "../types/webhook";
+import type { ParsedWhatsappRawEvent } from "../types/webhook";
+import { isMediaWhatsappRawEvent, isTextWhatsappRawEvent } from "../types/webhook";
 import { buildWhatsappTranscriptPdfBuffer } from "./transcript-gen";
 
 const HARVESTER_GROUP_ID = "whatsapp-media-harvester";
@@ -43,17 +44,49 @@ async function getConsumer(groupId: string): Promise<Consumer> {
   return consumer;
 }
 
-function deriveClaimStem(filename: string): string {
-  const lastDot = filename.lastIndexOf(".");
-  if (lastDot <= 0) {
-    return filename;
-  }
-  return filename.slice(0, lastDot);
+function normalizePhoneForPath(displayPhoneNumber: string): string {
+  return displayPhoneNumber.replace(/\s+/g, "").replace(/^\+/, "");
 }
 
-function deriveContextFolder(displayPhoneNumber: string, originalFilename: string): string {
-  const claimStem = deriveClaimStem(originalFilename);
-  return `${displayPhoneNumber}_${claimStem}`;
+function shortenWamid(messageId: string): string {
+  return messageId.length <= 10 ? messageId : messageId.slice(-10);
+}
+
+function resolveMessageTypeLabel(event: ParsedWhatsappRawEvent): string {
+  if (event.messageType) {
+    return event.messageType;
+  }
+  if (isMediaWhatsappRawEvent(event)) {
+    return "document";
+  }
+  return "unknown";
+}
+
+function formatHhmmssForContextFolder(timestamp: string): string {
+  const epochSec = Number.parseInt(timestamp, 10);
+  const d = Number.isFinite(epochSec) && epochSec > 0 ? new Date(epochSec * 1000) : new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}${pad(d.getUTCSeconds())}`;
+}
+
+function deriveContextFolder(event: ParsedWhatsappRawEvent): string {
+  const phone = normalizePhoneForPath(event.displayPhoneNumber);
+  const messageType = resolveMessageTypeLabel(event);
+  const hhmmss = formatHhmmssForContextFolder(event.timestamp);
+  return `${hhmmss}_${phone}_${messageType}_${shortenWamid(event.messageId)}`;
+}
+
+function deriveTranscriptFileName(messageId: string): string {
+  return `transcript_${shortenWamid(messageId)}.pdf`;
+}
+
+function buildWhatsAppObjectMetadata(event: ParsedWhatsappRawEvent): Record<string, string> {
+  return {
+    "message-id": event.messageId,
+    "sender-number": event.senderNumber,
+    "message-type": resolveMessageTypeLabel(event),
+    "display-phone-number": event.displayPhoneNumber,
+  };
 }
 
 function tryPlainVaultToken(vaultToken: string): string | null {
@@ -76,7 +109,7 @@ function tryPlainVaultToken(vaultToken: string): string | null {
   return null;
 }
 
-async function resolvePlainVaultToken(event: WhatsappRawEvent): Promise<string | null> {
+async function resolvePlainVaultToken(event: ParsedWhatsappRawEvent): Promise<string | null> {
   const channel = await findChannelByPhoneNumber(event.displayPhoneNumber);
   const candidates: string[] = [];
   if (channel?.vault_token_encrypted) {
@@ -100,7 +133,7 @@ async function resolvePlainVaultToken(event: WhatsappRawEvent): Promise<string |
   return null;
 }
 
-async function resolveAccessToken(event: WhatsappRawEvent): Promise<string | null> {
+async function resolveAccessToken(event: ParsedWhatsappRawEvent): Promise<string | null> {
   const plainVaultToken = await resolvePlainVaultToken(event);
   if (!plainVaultToken) {
     return null;
@@ -127,7 +160,50 @@ async function resolveAccessToken(event: WhatsappRawEvent): Promise<string | nul
   return typeof accessToken === "string" && accessToken.length > 0 ? accessToken : null;
 }
 
-async function processRawEvent(event: WhatsappRawEvent): Promise<void> {
+async function writeTranscript(
+  event: ParsedWhatsappRawEvent,
+  contextFolder: string,
+  originalFilename: string,
+): Promise<string> {
+  const storageConfig = buildStorageWriterConfig();
+  const transcriptBuffer = await buildWhatsappTranscriptPdfBuffer({
+    messageId: event.messageId,
+    senderNumber: event.senderNumber,
+    displayPhoneNumber: event.displayPhoneNumber,
+    timestamp: event.timestamp,
+    originalFilename,
+    messageText: event.messageText,
+  });
+
+  const transcriptFilename = deriveTranscriptFileName(event.messageId);
+  const transcriptResult = await writeToLanding(Readable.from(transcriptBuffer), {
+    orgId: event.orgId,
+    insuranceCompanyCode: event.zoneId,
+    contextFolder,
+    fileName: transcriptFilename,
+    mimeType: "application/pdf",
+    fileSizeBytes: transcriptBuffer.byteLength,
+    sourceChannel: WHATSAPP_SOURCE_CHANNEL,
+    objectMetadata: buildWhatsAppObjectMetadata(event),
+  }, storageConfig);
+
+  return transcriptResult.objectKey;
+}
+
+async function processTextEvent(event: ParsedWhatsappRawEvent): Promise<void> {
+  const contextFolder = deriveContextFolder(event);
+  const transcriptObjectKey = await writeTranscript(event, contextFolder, "(text message)");
+
+  console.log(
+    `[media-harvester] ✅ messageId=${event.messageId} messageType=text uploaded transcript=${transcriptObjectKey}`,
+  );
+}
+
+async function processMediaEvent(event: ParsedWhatsappRawEvent): Promise<void> {
+  if (!isMediaWhatsappRawEvent(event)) {
+    return;
+  }
+
   const accessToken = await resolveAccessToken(event);
   if (!accessToken) {
     return;
@@ -145,45 +221,48 @@ async function processRawEvent(event: WhatsappRawEvent): Promise<void> {
 
   const fileSizeBytes =
     typeof mediaInfo.data.file_size === "number" ? mediaInfo.data.file_size : 0;
-  const contextFolder = deriveContextFolder(event.displayPhoneNumber, event.originalFilename);
+  const contextFolder = deriveContextFolder(event);
+  const objectMetadata = buildWhatsAppObjectMetadata(event);
 
   const fileResponse = await axios.get(cdnUrl, {
     headers: { Authorization: `Bearer ${accessToken}` },
     responseType: "stream",
   });
 
-  const pdfResult = await writeToLanding(fileResponse.data as Readable, {
+  const storageConfig = buildStorageWriterConfig();
+
+  const mediaResult = await writeToLanding(fileResponse.data as Readable, {
     orgId: event.orgId,
-    zoneId: event.zoneId,
+    insuranceCompanyCode: event.zoneId,
     contextFolder,
     fileName: event.originalFilename,
     mimeType: event.mimeType,
     fileSizeBytes,
     sourceChannel: WHATSAPP_SOURCE_CHANNEL,
-  });
+    objectMetadata,
+  }, storageConfig);
 
-  const transcriptBuffer = await buildWhatsappTranscriptPdfBuffer({
-    messageId: event.messageId,
-    senderNumber: event.senderNumber,
-    displayPhoneNumber: event.displayPhoneNumber,
-    timestamp: event.timestamp,
-    originalFilename: event.originalFilename,
-    messageText: event.messageText,
-  });
-
-  const transcriptFilename = `transcript_${event.messageId}.pdf`;
-  const transcriptResult = await writeToLanding(Readable.from(transcriptBuffer), {
-    orgId: event.orgId,
-    zoneId: event.zoneId,
-    contextFolder,
-    fileName: transcriptFilename,
-    mimeType: "application/pdf",
-    fileSizeBytes: transcriptBuffer.byteLength,
-    sourceChannel: WHATSAPP_SOURCE_CHANNEL,
-  });
+  const transcriptObjectKey = await writeTranscript(event, contextFolder, event.originalFilename);
 
   console.log(
-    `[media-harvester] ✅ messageId=${event.messageId} uploaded pdf=${pdfResult.objectKey} transcript=${transcriptResult.objectKey}`,
+    `[media-harvester] ✅ messageId=${event.messageId} messageType=${event.messageType ?? "document"} uploaded media=${mediaResult.objectKey} transcript=${transcriptObjectKey}`,
+  );
+}
+
+async function processRawEvent(event: ParsedWhatsappRawEvent): Promise<void> {
+  if (isTextWhatsappRawEvent(event)) {
+    await processTextEvent(event);
+    return;
+  }
+
+  if (isMediaWhatsappRawEvent(event)) {
+    await processMediaEvent(event);
+    return;
+  }
+
+  const unrecognized = event as ParsedWhatsappRawEvent;
+  console.warn(
+    `[media-harvester] Skipping messageId=${unrecognized.messageId}: unrecognized messageType=${String(unrecognized.messageType)}`,
   );
 }
 
@@ -202,9 +281,9 @@ export async function startMediaHarvester(): Promise<void> {
           return;
         }
 
-        let event: WhatsappRawEvent | undefined;
+        let event: ParsedWhatsappRawEvent | undefined;
         try {
-          event = JSON.parse(message.value.toString()) as WhatsappRawEvent;
+          event = JSON.parse(message.value.toString()) as ParsedWhatsappRawEvent;
           await processRawEvent(event);
         } catch (err) {
           const messageId = event?.messageId ?? "unknown";

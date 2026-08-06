@@ -1,14 +1,123 @@
 import type { FastifyBaseLogger, FastifyRequest } from "fastify";
 import { config } from "../../../../config";
 import { AppError } from "../../../../errors/appError";
-import { producer } from "../../../../infra/clients";
+import { producer, redisClient } from "../../../../infra/clients";
 import { findChannelByPhoneNumber } from "../../../../repositories/whatsappChannel.repository";
-import type { MetaWebhookPayload, WhatsappRawEvent } from "../types/webhook";
+import type { WhatsappChannel } from "../../../../models/whatsapp-channel.model";
+import type { MetaWebhookMessage, MetaWebhookPayload, WhatsappRawEvent } from "../types/webhook";
 import { verifyMetaSignature } from "./signature";
 
 export interface WhatsappWebhookRequest extends FastifyRequest {
   rawBody?: Buffer;
   body: MetaWebhookPayload;
+}
+
+const SKIPPED_MESSAGE_TYPES = new Set([
+  "audio",
+  "video",
+  "location",
+  "interactive",
+  "sticker",
+  "reaction",
+]);
+
+const IMAGE_MIME_EXTENSION: Record<string, string> = {
+  "image/jpeg": "jpg",
+  "image/png": "png",
+  "image/webp": "webp",
+  "image/gif": "gif",
+};
+
+function deriveImageFilename(messageId: string, mimeType: string): string {
+  const ext = IMAGE_MIME_EXTENSION[mimeType] ?? "bin";
+  return `image_${messageId}.${ext}`;
+}
+
+function buildRawEvent(
+  message: MetaWebhookMessage,
+  channel: WhatsappChannel,
+  displayPhoneNumber: string,
+): WhatsappRawEvent | null {
+  const base = {
+    orgId: channel.org_id,
+    zoneId: channel.zone_id,
+    kmsServiceId: channel.kms_service_id,
+    vaultToken: channel.vault_token_encrypted,
+    displayPhoneNumber,
+    messageId: message.id,
+    senderNumber: message.from,
+    timestamp: message.timestamp,
+  };
+
+  switch (message.type) {
+    case "text": {
+      if (!message.text?.body) {
+        return null;
+      }
+      return {
+        ...base,
+        messageType: "text",
+        messageText: message.text.body,
+      };
+    }
+    case "document": {
+      if (!message.document) {
+        return null;
+      }
+      return {
+        ...base,
+        messageType: "document",
+        messageText: message.document.caption ?? null,
+        mediaId: message.document.id,
+        originalFilename: message.document.filename,
+        mimeType: message.document.mime_type,
+      };
+    }
+    case "image": {
+      if (!message.image) {
+        return null;
+      }
+      return {
+        ...base,
+        messageType: "image",
+        messageText: message.image.caption ?? null,
+        mediaId: message.image.id,
+        originalFilename: deriveImageFilename(message.id, message.image.mime_type),
+        mimeType: message.image.mime_type,
+      };
+    }
+    default:
+      return null;
+  }
+}
+
+async function tryClaimMessageDedup(messageId: string, log: FastifyBaseLogger): Promise<boolean> {
+  const key = `whatsapp:dedup:${messageId}`;
+  try {
+    const result = await redisClient.set(key, "1", "EX", config.dedupTtlSec, "NX");
+    if (result === null) {
+      log.info({ messageId }, "Duplicate WhatsApp message skipped");
+      return false;
+    }
+    return true;
+  } catch (err) {
+    log.warn({ err, messageId }, "Redis dedup unavailable; proceeding with publish");
+    return true;
+  }
+}
+
+function publishRawEvent(event: WhatsappRawEvent, displayPhoneNumber: string, log: FastifyBaseLogger): void {
+  producer
+    .send({
+      topic: config.whatsappRawEventsTopic,
+      messages: [
+        {
+          key: displayPhoneNumber,
+          value: JSON.stringify(event),
+        },
+      ],
+    })
+    .catch((err) => log.error({ err, messageId: event.messageId }, "Failed to publish WhatsApp raw event to Kafka"));
 }
 
 export function handleVerification(
@@ -52,42 +161,34 @@ export async function handleIncomingWebhook(
       }
 
       for (const message of value.messages ?? []) {
-        if (message.type !== "document" || !message.document) {
+        if (SKIPPED_MESSAGE_TYPES.has(message.type)) {
+          log.debug(
+            { messageType: message.type, messageId: message.id },
+            "Skipping unsupported WhatsApp message type",
+          );
           continue;
         }
 
         const channel = await findChannelByPhoneNumber(displayPhoneNumber);
         if (!channel) {
-          log.warn({ displayPhoneNumber }, "WhatsApp channel not found for inbound document; skipping message");
+          log.warn(
+            { displayPhoneNumber, messageId: message.id, messageType: message.type },
+            "WhatsApp channel not found for inbound message; skipping",
+          );
           continue;
         }
 
-        const event: WhatsappRawEvent = {
-          orgId: channel.org_id,
-          zoneId: channel.zone_id,
-          kmsServiceId: channel.kms_service_id,
-          vaultToken: channel.vault_token_encrypted,
-          displayPhoneNumber,
-          messageId: message.id,
-          senderNumber: message.from,
-          timestamp: message.timestamp,
-          messageText: message.text?.body ?? message.document.caption ?? null,
-          mediaId: message.document.id,
-          originalFilename: message.document.filename,
-          mimeType: message.document.mime_type,
-        };
+        const event = buildRawEvent(message, channel, displayPhoneNumber);
+        if (!event) {
+          continue;
+        }
 
-        producer
-          .send({
-            topic: config.whatsappRawEventsTopic,
-            messages: [
-              {
-                key: displayPhoneNumber,
-                value: JSON.stringify(event),
-              },
-            ],
-          })
-          .catch((err) => log.error({ err }, "Failed to publish WhatsApp raw event to Kafka"));
+        const shouldPublish = await tryClaimMessageDedup(message.id, log);
+        if (!shouldPublish) {
+          continue;
+        }
+
+        publishRawEvent(event, displayPhoneNumber, log);
       }
     }
   }

@@ -18,7 +18,45 @@ export interface WriteInput {
   mimeType: string
   fileSizeBytes: number
   sourceChannel: string
+  /** Optional object user-metadata (e.g. x-amz-meta-* on S3, MinIO user headers). */
+  objectMetadata?: Record<string, string>
 }
+
+/** Landing-bucket connection config — passed explicitly by each host service (mirrors ReadInput.sourceCredentials). */
+export interface S3WriterConfig {
+  provider: 'S3'
+  region: string
+  endpoint?: string
+  accessKeyId: string
+  secretAccessKey: string
+  bucket: string
+}
+
+export interface MinioWriterConfig {
+  provider: 'MINIO'
+  endpoint: string
+  port?: number
+  useSSL?: boolean
+  accessKey: string
+  secretKey: string
+  bucket: string
+}
+
+/** Placeholder until gcp.writer.ts is implemented. */
+export interface GcpWriterConfig {
+  provider: 'GCP'
+}
+
+/** Placeholder until azure.writer.ts is implemented. */
+export interface AzureWriterConfig {
+  provider: 'AZURE'
+}
+
+export type StorageWriterConfig =
+  | S3WriterConfig
+  | MinioWriterConfig
+  | GcpWriterConfig
+  | AzureWriterConfig
 
 export interface FileDescriptor {
   orgId: string
@@ -89,5 +127,10 @@ export interface ReaderDriver {
 
 /** Writer driver: streams to Sentinel landing bucket */
 export interface WriterDriver {
-  write(stream: Readable, input: WriteInput, objectKey: string): Promise<TransferResult>
+  write(
+    stream: Readable,
+    input: WriteInput,
+    objectKey: string,
+    storageConfig: StorageWriterConfig,
+  ): Promise<TransferResult>
 }

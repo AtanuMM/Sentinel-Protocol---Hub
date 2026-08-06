@@ -56,3 +56,52 @@ export const config = {
   metaAppId: required("META_APP_ID"),
   whatsappRawEventsTopic: process.env.WHATSAPP_RAW_EVENTS_TOPIC ?? "whatsapp-raw-events",
 };
+
+function requireLandingEnv(name: string): string {
+  const v = process.env[name]?.trim();
+  if (!v) {
+    throw new Error(`${name} env var is not set; cannot write to Sentinel landing bucket.`);
+  }
+  return v;
+}
+
+/** Resolve landing-bucket writer config from this service's .env for storage-core writeToLanding(). */
+export function buildStorageWriterConfig(): import("@sentinel/storage-core").StorageWriterConfig {
+  const provider = process.env.STORAGE_PROVIDER?.trim().toUpperCase();
+  if (!provider) {
+    throw new Error(
+      "STORAGE_PROVIDER env var is not set. Expected one of: MINIO, S3, GCP, AZURE",
+    );
+  }
+  switch (provider) {
+    case "S3":
+      return {
+        provider: "S3",
+        region: requireLandingEnv("AWS_REGION"),
+        endpoint: process.env.AWS_ENDPOINT?.trim() || undefined,
+        accessKeyId: requireLandingEnv("AWS_ACCESS_KEY_ID"),
+        secretAccessKey: requireLandingEnv("AWS_SECRET_ACCESS_KEY"),
+        bucket: requireLandingEnv("AWS_BUCKET"),
+      };
+    case "MINIO": {
+      const portRaw = process.env.MINIO_PORT?.trim();
+      return {
+        provider: "MINIO",
+        endpoint: requireLandingEnv("MINIO_ENDPOINT"),
+        port: portRaw ? parseInt(portRaw, 10) : undefined,
+        useSSL: process.env.MINIO_USE_SSL?.trim().toLowerCase() === "true",
+        accessKey: requireLandingEnv("MINIO_ACCESS_KEY"),
+        secretKey: requireLandingEnv("MINIO_SECRET_KEY"),
+        bucket: requireLandingEnv("MINIO_BUCKET"),
+      };
+    }
+    case "GCP":
+      return { provider: "GCP" };
+    case "AZURE":
+      return { provider: "AZURE" };
+    default:
+      throw new Error(
+        `Unsupported STORAGE_PROVIDER "${provider}". Expected one of: MINIO, S3, GCP, AZURE`,
+      );
+  }
+}

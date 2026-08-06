@@ -19,7 +19,7 @@ export async function registerSwagger(app: FastifyInstance): Promise<void> {
       info: {
         title: "Sentinel Protocol — WhatsApp-to-FTP ingestion",
         description:
-          "Fastify microservice for the WhatsApp ingestion pipeline. Meta webhook at `/v1/whatsapp/webhook`.",
+          "Fastify microservice for the WhatsApp ingestion pipeline. Meta webhook at `/api/v1/whatsapp/webhook`.",
         version: readPackageVersion(),
       },
       servers: [{ url: "/", description: "Current server" }],
