@@ -172,6 +172,19 @@ services:
   #     MINIO_ACCESS_KEY: admin
   #     MINIO_SECRET_KEY: SuperSecret123
   #     NODE_ENV: development
+  # claims-ocr-service:
+  #   build: ./claims-ocr-service
+  #   container_name: sentinel-claims-ocr
+  #   ports: ["3003:3003"]
+  #   depends_on: [db, minio]
+  #   environment:
+  #     DATABASE_URL: postgresql+psycopg2://postgres:postgres123@db:5432/sentinel_mdm
+  #     S3_ENDPOINT_URL: http://minio:9000
+  #     S3_ACCESS_KEY: minioadmin
+  #     S3_SECRET_KEY: minioadmin
+  #     S3_BUCKET_NAME: claims-ocr
+  #     GEMINI_API_KEY: ${GEMINI_API_KEY}
+  #     PORT: 3003
 
 volumes:
   roundcube_data:
