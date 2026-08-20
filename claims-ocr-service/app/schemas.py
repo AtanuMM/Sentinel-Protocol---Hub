@@ -122,3 +122,19 @@ class ClaimExtractionResult(BaseModel):
 
     extraction_summary: ExtractionSummary
     extraction_data: ClaimExtractionPayload
+
+
+class ClaimListItem(BaseModel):
+    id: UUID
+    original_filename: str
+    s3_url: str
+    status: str
+    document_type: Optional[str] = None
+    overall_confidence: Optional[str] = None
+    model_used: Optional[str] = None
+    created_at: datetime
+
+
+class ClaimListResponse(BaseModel):
+    items: list[ClaimListItem]
+    total: int

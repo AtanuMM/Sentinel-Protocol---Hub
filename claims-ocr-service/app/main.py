@@ -5,6 +5,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.routes import router
+from app.routes.claims import router as claims_router
+from app.routes.process import router as process_router
 from app.routes.upload import router as upload_router
 from app.s3_client import ensure_bucket_exists
 from app.startup import verify_database_connection
@@ -28,6 +30,8 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 app = FastAPI(title="Claims OCR Service", lifespan=lifespan)
 app.include_router(router)
 app.include_router(upload_router)
+app.include_router(process_router)
+app.include_router(claims_router)
 
 
 @app.get("/health", tags=["health"])

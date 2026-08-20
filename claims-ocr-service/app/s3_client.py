@@ -2,7 +2,7 @@ import logging
 from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 from uuid import uuid4
 
 import boto3
@@ -76,6 +76,20 @@ def download_to_temp(s3_key: str) -> str:
         raise S3DownloadError(f"Failed to download S3 object '{s3_key}'") from None
 
     return str(local_path)
+
+
+def s3_key_from_url(s3_url: str) -> str:
+    settings = get_settings()
+    expected_prefix = (
+        f"{settings.s3_endpoint_url.rstrip('/')}/{settings.s3_bucket_name}/"
+    )
+    if not s3_url.startswith(expected_prefix):
+        raise S3DownloadError("Stored S3 URL does not match the configured bucket")
+
+    s3_key = unquote(s3_url.removeprefix(expected_prefix))
+    if not s3_key:
+        raise S3DownloadError("Stored S3 URL does not contain an object key")
+    return s3_key
 
 
 def delete_local_file(local_path: str) -> None:
