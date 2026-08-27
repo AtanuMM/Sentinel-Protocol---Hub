@@ -2,17 +2,21 @@ import axios from "axios";
 import { WhatsappChannelModel } from "../../../../infra/db";
 import { AppError } from "../../../../errors/appError";
 import { config } from "../../../../config";
-import { encryptText } from "../../../../utils/crypto";
+import { decryptText, encryptText } from "../../../../utils/crypto";
 import { vaultClient } from "../../../../utils/vault-client";
 import {
   findAllByOrgId,
+  findChannelById,
   findChannelByPhoneNumberAnyStatus,
   setChannelStatus,
+  updateLandingStorageMetadata,
 } from "../../../../repositories/whatsappChannel.repository";
 import type {
   ConnectWhatsappChannelInput,
   DisconnectWhatsappChannelInput,
+  UpdateLandingStorageInput,
 } from "./provisioning.schemas";
+import type { WhatsappChannel } from "../../../../models/whatsapp-channel.model";
 
 const META_GRAPH_BASE = "https://graph.facebook.com/v20.0";
 
@@ -33,6 +37,52 @@ export interface WhatsappChannelListItem {
   zoneId: string;
   status: string;
   createdAt: string;
+}
+
+export interface WhatsappChannelPublicRow {
+  id: number;
+  orgId: string;
+  zoneId: string;
+  phoneNumber: string;
+  kmsServiceId: string;
+  wabaId: string;
+  phoneNumberId: string;
+  status: string;
+  landingStorageProvider: string | null;
+  landingBucket: string | null;
+  landingRegion: string | null;
+  landingEndpoint: string | null;
+  landingKmsKeyName: string | null;
+  landingUseSsl: boolean | null;
+  landingPort: number | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export function toPublicWhatsappChannelRow(channel: WhatsappChannel): WhatsappChannelPublicRow {
+  return {
+    id: channel.id,
+    orgId: channel.org_id,
+    zoneId: channel.zone_id,
+    phoneNumber: channel.phone_number,
+    kmsServiceId: channel.kms_service_id,
+    wabaId: channel.waba_id,
+    phoneNumberId: channel.phone_number_id,
+    status: channel.status,
+    landingStorageProvider: channel.landing_storage_provider,
+    landingBucket: channel.landing_bucket,
+    landingRegion: channel.landing_region,
+    landingEndpoint: channel.landing_endpoint,
+    landingKmsKeyName: channel.landing_kms_key_name,
+    landingUseSsl: channel.landing_use_ssl,
+    landingPort: channel.landing_port,
+    createdAt: channel.createdAt.toISOString(),
+    updatedAt: channel.updatedAt.toISOString(),
+  };
+}
+
+function defaultLandingKmsKeyName(channelId: number): string {
+  return `landing:whatsapp:${channelId}`;
 }
 
 export class ProvisioningService {
@@ -107,6 +157,7 @@ export class ProvisioningService {
           serviceId,
           keyName: vaultKeyName,
           value: {
+            type: "META_WHATSAPP",
             provider: "WHATSAPP",
             phone_number: phoneNumber,
             phone_number_id: phoneNumberId,
@@ -198,5 +249,52 @@ export class ProvisioningService {
     if (!updated) {
       throw new AppError(404, `WhatsApp channel ${phoneNumber} not found.`, "WHATSAPP_CHANNEL_NOT_FOUND");
     }
+  }
+
+  async updateChannelLandingStorage(
+    channelId: number,
+    input: UpdateLandingStorageInput,
+  ): Promise<WhatsappChannelPublicRow> {
+    const channel = await findChannelById(channelId);
+    if (!channel) {
+      throw new AppError(404, `WhatsApp channel ${channelId} not found.`, "WHATSAPP_CHANNEL_NOT_FOUND");
+    }
+
+    const plainVaultToken = decryptText(channel.vault_token_encrypted);
+    const keyName = channel.landing_kms_key_name?.trim() || defaultLandingKmsKeyName(channel.id);
+
+    try {
+      await vaultClient.storeSecret(
+        {
+          serviceId: channel.kms_service_id,
+          keyName,
+          value: {
+            type: "LANDING",
+            provider: input.provider,
+            ...input.credentials,
+          },
+        },
+        plainVaultToken,
+      );
+    } catch (vaultErr) {
+      const msg = vaultErr instanceof Error ? vaultErr.message : String(vaultErr);
+      throw new AppError(502, `Failed to store landing credentials in Vault: ${msg}`, "VAULT_STORE_FAILED");
+    }
+
+    const updated = await updateLandingStorageMetadata(channelId, {
+      landing_storage_provider: input.provider,
+      landing_bucket: input.bucket,
+      landing_region: input.region ?? null,
+      landing_endpoint: input.endpoint ?? null,
+      landing_kms_key_name: keyName,
+      landing_use_ssl: input.useSSL ?? null,
+      landing_port: input.port ?? null,
+    });
+
+    if (!updated) {
+      throw new AppError(404, `WhatsApp channel ${channelId} not found.`, "WHATSAPP_CHANNEL_NOT_FOUND");
+    }
+
+    return toPublicWhatsappChannelRow(updated);
   }
 }

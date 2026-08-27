@@ -2,9 +2,10 @@ import { writeToLanding } from "@sentinel/storage-core";
 import axios from "axios";
 import { Consumer, Kafka } from "kafkajs";
 import { Readable } from "stream";
-import { config, buildStorageWriterConfig } from "../../../../config";
+import { config, buildStorageWriterConfigForChannel } from "../../../../config";
 import { decryptText } from "../../../../utils/crypto";
 import { findChannelByPhoneNumber } from "../../../../repositories/whatsappChannel.repository";
+import type { WhatsappChannel } from "../../../../models/whatsapp-channel.model";
 import type { ParsedWhatsappRawEvent } from "../types/webhook";
 import { isMediaWhatsappRawEvent, isTextWhatsappRawEvent } from "../types/webhook";
 import { buildWhatsappTranscriptPdfBuffer } from "./transcript-gen";
@@ -109,10 +110,24 @@ function tryPlainVaultToken(vaultToken: string): string | null {
   return null;
 }
 
-async function resolvePlainVaultToken(event: ParsedWhatsappRawEvent): Promise<string | null> {
+interface ResolvedChannelContext {
+  channel: WhatsappChannel;
+  plainVaultToken: string;
+}
+
+async function resolveChannelContext(
+  event: ParsedWhatsappRawEvent,
+): Promise<ResolvedChannelContext | null> {
   const channel = await findChannelByPhoneNumber(event.displayPhoneNumber);
+  if (!channel) {
+    console.warn(
+      `[media-harvester] Skipping messageId=${event.messageId}: no ACTIVE whatsapp_channels row for ${event.displayPhoneNumber}.`,
+    );
+    return null;
+  }
+
   const candidates: string[] = [];
-  if (channel?.vault_token_encrypted) {
+  if (channel.vault_token_encrypted) {
     candidates.push(channel.vault_token_encrypted);
   }
   if (event.vaultToken && !candidates.includes(event.vaultToken)) {
@@ -122,7 +137,7 @@ async function resolvePlainVaultToken(event: ParsedWhatsappRawEvent): Promise<st
   for (let i = 0; i < candidates.length; i++) {
     const plain = tryPlainVaultToken(candidates[i]);
     if (plain) {
-      return plain;
+      return { channel, plainVaultToken: plain };
     }
   }
 
@@ -133,21 +148,26 @@ async function resolvePlainVaultToken(event: ParsedWhatsappRawEvent): Promise<st
   return null;
 }
 
-async function resolveAccessToken(event: ParsedWhatsappRawEvent): Promise<string | null> {
-  const plainVaultToken = await resolvePlainVaultToken(event);
-  if (!plainVaultToken) {
-    return null;
-  }
+async function resolveAccessToken(
+  event: ParsedWhatsappRawEvent,
+  plainVaultToken: string,
+): Promise<string | null> {
   const servicePath = encodeURIComponent(event.kmsServiceId);
   const response = await axios.get<KmsSecretListItem[]>(
     `${config.vaultUrl}/secrets/${servicePath}`,
     { headers: { "x-vault-token": plainVaultToken } },
   );
 
-  const secret = response.data.find(
-    (s) =>
-      s.value?.provider === "WHATSAPP" && s.value?.phone_number === event.displayPhoneNumber,
-  );
+  const secret = response.data.find((s) => {
+    const value = s.value;
+    if (!value) {
+      return false;
+    }
+    if (value.type === "META_WHATSAPP" && value.phone_number === event.displayPhoneNumber) {
+      return true;
+    }
+    return value.provider === "WHATSAPP" && value.phone_number === event.displayPhoneNumber;
+  });
 
   if (!secret?.value) {
     console.error(
@@ -162,10 +182,11 @@ async function resolveAccessToken(event: ParsedWhatsappRawEvent): Promise<string
 
 async function writeTranscript(
   event: ParsedWhatsappRawEvent,
+  channel: WhatsappChannel,
   contextFolder: string,
   originalFilename: string,
 ): Promise<string> {
-  const storageConfig = buildStorageWriterConfig();
+  const storageConfig = await buildStorageWriterConfigForChannel(channel);
   const transcriptBuffer = await buildWhatsappTranscriptPdfBuffer({
     messageId: event.messageId,
     senderNumber: event.senderNumber,
@@ -191,8 +212,18 @@ async function writeTranscript(
 }
 
 async function processTextEvent(event: ParsedWhatsappRawEvent): Promise<void> {
+  const ctx = await resolveChannelContext(event);
+  if (!ctx) {
+    return;
+  }
+
   const contextFolder = deriveContextFolder(event);
-  const transcriptObjectKey = await writeTranscript(event, contextFolder, "(text message)");
+  const transcriptObjectKey = await writeTranscript(
+    event,
+    ctx.channel,
+    contextFolder,
+    "(text message)",
+  );
 
   console.log(
     `[media-harvester] ✅ messageId=${event.messageId} messageType=text uploaded transcript=${transcriptObjectKey}`,
@@ -204,7 +235,12 @@ async function processMediaEvent(event: ParsedWhatsappRawEvent): Promise<void> {
     return;
   }
 
-  const accessToken = await resolveAccessToken(event);
+  const ctx = await resolveChannelContext(event);
+  if (!ctx) {
+    return;
+  }
+
+  const accessToken = await resolveAccessToken(event, ctx.plainVaultToken);
   if (!accessToken) {
     return;
   }
@@ -229,7 +265,7 @@ async function processMediaEvent(event: ParsedWhatsappRawEvent): Promise<void> {
     responseType: "stream",
   });
 
-  const storageConfig = buildStorageWriterConfig();
+  const storageConfig = await buildStorageWriterConfigForChannel(ctx.channel);
 
   const mediaResult = await writeToLanding(fileResponse.data as Readable, {
     orgId: event.orgId,
@@ -242,7 +278,12 @@ async function processMediaEvent(event: ParsedWhatsappRawEvent): Promise<void> {
     objectMetadata,
   }, storageConfig);
 
-  const transcriptObjectKey = await writeTranscript(event, contextFolder, event.originalFilename);
+  const transcriptObjectKey = await writeTranscript(
+    event,
+    ctx.channel,
+    contextFolder,
+    event.originalFilename,
+  );
 
   console.log(
     `[media-harvester] ✅ messageId=${event.messageId} messageType=${event.messageType ?? "document"} uploaded media=${mediaResult.objectKey} transcript=${transcriptObjectKey}`,

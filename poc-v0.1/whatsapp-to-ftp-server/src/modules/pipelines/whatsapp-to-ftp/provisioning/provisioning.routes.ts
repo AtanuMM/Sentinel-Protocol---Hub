@@ -9,6 +9,9 @@ import {
   listWhatsappChannelsQuerySchema,
   listWhatsappChannelsResponseSchema,
   provisioningHeadersSchema,
+  updateLandingStorageBodySchema,
+  updateLandingStorageParamsSchema,
+  updateLandingStorageResponseSchema,
 } from "./provisioning.schemas";
 import { ProvisioningService } from "./provisioning.service";
 
@@ -44,6 +47,22 @@ export const registerProvisioningRoutes = async (app: FastifyInstance): Promise<
       },
     },
     controller.listWhatsappChannels,
+  );
+
+  app.patch(
+    "/whatsapp-channel/:id/landing-storage",
+    {
+      schema: {
+        tags: [openApiTags.whatsappProvisioning],
+        summary: "Configure per-channel landing storage",
+        description:
+          "Internal admin: stores LANDING credentials in KMS (type LANDING) and persists non-secret landing metadata on the channel row.",
+        params: updateLandingStorageParamsSchema,
+        body: updateLandingStorageBodySchema,
+        response: { 200: updateLandingStorageResponseSchema },
+      },
+    },
+    controller.updateChannelLandingStorage,
   );
 
   app.post(

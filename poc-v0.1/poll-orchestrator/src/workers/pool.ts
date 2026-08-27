@@ -313,6 +313,8 @@ async function handleEmailJob(job: PollJobMessage, secrets: VaultSecretListItem[
     sourceChannel: EMAIL_SOURCE_CHANNEL,
   })
 
+  console.log('descriptors line 316 pool.ts>>>>>>>>>>>>>>>>>>', descriptors)
+
   if (descriptors.length === 0) {
     // Do NOT advance the cursor: the reader only surfaces matched UIDs, so with no matches we have
     // no higher watermark to record.

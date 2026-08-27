@@ -13,8 +13,20 @@ import NgChannelCard from '../components/ui/NgChannelCard';
 import NgToast from '../components/ui/NgToast';
 import IngressSetupModal from '../components/ingress/IngressSetupModal';
 import { useFTPConnections, useEmailSourceConnections } from '../hooks/useIngressConnections';
+import { loadFacebookSdk } from '../utils/facebookSdk.js';
 
 const ORG_LABEL = 'ORG: NI-001';
+/** @type {string} Org ID derived from ORG_LABEL display value */
+const ORG_ID = ORG_LABEL.replace(/^ORG:\s*/, '');
+/** PLACEHOLDER — replace with real KMS/vault serviceId before connecting a live client */
+const WHATSAPP_KMS_SERVICE_ID = '00000000-0000-0000-0000-000000000000';
+/** PLACEHOLDER — replace with the organisation's deployment zone before production */
+const WHATSAPP_ZONE_ID = 'eu-central-1';
+
+/** @typedef {'idle' | 'connecting' | 'finalizing' | 'success' | 'error'} WhatsappFlowState */
+
+const WHATSAPP_ACTION_BTN =
+  'w-full py-3.5 rounded-xl text-[11px] font-black uppercase tracking-widest transition-all';
 const VAULT_PROVISION_PATH = '/api/v1/auth/provision';
 const EMPTY_VAULT_FORM = { keycloakId: '', email: '' };
 
@@ -42,6 +54,11 @@ export default function AddChannels() {
   const [ingressModalOpen, setIngressModalOpen] = useState(false);
   const [ingressModalKey, setIngressModalKey] = useState(0);
   const [whatsappModalOpen, setWhatsappModalOpen] = useState(false);
+  /** @type {[WhatsappFlowState, React.Dispatch<React.SetStateAction<WhatsappFlowState>>]} */
+  const [whatsappFlowState, setWhatsappFlowState] = useState('idle');
+  const [whatsappError, setWhatsappError] = useState('');
+  /** @type {[import('../types/whatsappChannel.js').ConnectWhatsappChannelData | null, React.Dispatch<React.SetStateAction<import('../types/whatsappChannel.js').ConnectWhatsappChannelData | null>>]} */
+  const [whatsappSuccess, setWhatsappSuccess] = useState(null);
   const [vaultModalOpen, setVaultModalOpen] = useState(false);
   const [vaultForm, setVaultForm] = useState(EMPTY_VAULT_FORM);
   const [toastMessage, setToastMessage] = useState('');
@@ -90,8 +107,119 @@ export default function AddChannels() {
     console.log('[AddChannels] Setup Email Vault Service');
   };
 
+  const resetWhatsappModal = () => {
+    setWhatsappFlowState('idle');
+    setWhatsappError('');
+    setWhatsappSuccess(null);
+  };
+
+  const onCloseWhatsappModal = () => {
+    setWhatsappModalOpen(false);
+    resetWhatsappModal();
+  };
+
   const onAddWhatsApp = () => {
+    resetWhatsappModal();
     setWhatsappModalOpen(true);
+  };
+
+  const handleConnectWhatsApp = async () => {
+    const appId = import.meta.env.VITE_META_APP_ID?.trim();
+    const configId = import.meta.env.VITE_META_LOGIN_CONFIG_ID?.trim();
+    const vaultToken = import.meta.env.VITE_VAULT_TOKEN?.trim();
+    const ingestionBase = (
+      import.meta.env.VITE_WHATSAPP_INGESTION_URL ?? 'http://localhost:3002'
+    ).replace(/\/$/, '');
+
+    if (!appId || !configId) {
+      setWhatsappFlowState('error');
+      setWhatsappError('Meta App ID and Login Configuration ID must be set in environment variables.');
+      return;
+    }
+
+    if (!vaultToken) {
+      setWhatsappFlowState('error');
+      setWhatsappError('VITE_VAULT_TOKEN is not configured.');
+      return;
+    }
+
+    setWhatsappFlowState('connecting');
+    setWhatsappError('');
+
+    try {
+      const FB = await loadFacebookSdk(appId);
+
+      const authorizationCode = await new Promise((resolve) => {
+        // Requires this domain (localhost:5173 for dev) to be allowlisted in Meta App Settings >
+        // Facebook Login for Business > Settings > Allowed Domains for the JS SDK. Also requires
+        // HTTPS in production — Meta permits localhost as an exception for local dev.
+        FB.login(
+          (response) => {
+            resolve(response.authResponse?.code ?? null);
+          },
+          {
+            config_id: configId,
+            response_type: 'code',
+            override_default_response_type: true,
+            extras: {
+              setup: {},
+              featureType: '',
+              sessionInfoVersion: '3',
+            },
+          },
+        );
+      });
+
+      if (!authorizationCode) {
+        setWhatsappFlowState('error');
+        setWhatsappError('Signup was cancelled or did not complete.');
+        return;
+      }
+
+      setWhatsappFlowState('finalizing');
+
+      /** @type {import('../types/whatsappChannel.js').ConnectWhatsappChannelRequest} */
+      const payload = {
+        orgId: ORG_ID,
+        serviceId: WHATSAPP_KMS_SERVICE_ID,
+        zoneId: WHATSAPP_ZONE_ID,
+        authorizationCode,
+      };
+
+      const res = await fetch(`${ingestionBase}/api/v1/whatsapp-to-ftp/whatsapp-channel`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-vault-token': vaultToken,
+        },
+        body: JSON.stringify(payload),
+      });
+
+      /** @type {import('../types/whatsappChannel.js').ConnectWhatsappChannelResponse | import('../types/whatsappChannel.js').ConnectWhatsappChannelErrorResponse} */
+      let data = {};
+      try {
+        data = await res.json();
+      } catch {
+        data = {};
+      }
+
+      if (!res.ok || !data.success) {
+        const message =
+          data.message ||
+          data.error ||
+          data.detail ||
+          `Failed to connect WhatsApp channel (${res.status}).`;
+        setWhatsappFlowState('error');
+        setWhatsappError(typeof message === 'string' ? message : 'Failed to connect WhatsApp channel.');
+        return;
+      }
+
+      setWhatsappSuccess(data.data ?? null);
+      setWhatsappFlowState('success');
+    } catch (err) {
+      setWhatsappFlowState('error');
+      setWhatsappError(err instanceof Error ? err.message : 'Something went wrong. Please try again.');
+    }
   };
 
   const onRefreshEmailSources = () => {
@@ -301,11 +429,128 @@ export default function AddChannels() {
 
       <NgModal
         open={whatsappModalOpen}
-        onClose={() => setWhatsappModalOpen(false)}
+        onClose={onCloseWhatsappModal}
         title="Add WhatsApp Source"
-        primaryLabel="Close"
+        subtitle={
+          whatsappFlowState === 'success'
+            ? 'Channel connected'
+            : 'Meta WhatsApp Embedded Signup'
+        }
+        bodyAlign="left"
+        centered={false}
+        showCloseIcon
+        maxWidth="max-w-lg"
+        footer={
+          whatsappFlowState === 'success' ? (
+            <div className="border-t border-white/5 px-10 py-8">
+              <button
+                type="button"
+                onClick={onCloseWhatsappModal}
+                className={`${WHATSAPP_ACTION_BTN} bg-[var(--color-ng-primary)] text-[#050810] hover:shadow-[0_0_20px_rgba(0,209,255,0.4)]`}
+              >
+                Done
+              </button>
+            </div>
+          ) : whatsappFlowState === 'error' ? (
+            <div className="border-t border-white/5 px-10 py-8 space-y-3">
+              <button
+                type="button"
+                onClick={handleConnectWhatsApp}
+                className={`${WHATSAPP_ACTION_BTN} bg-[var(--color-ng-primary)] text-[#050810] hover:shadow-[0_0_20px_rgba(0,209,255,0.4)]`}
+              >
+                Try Again
+              </button>
+              <button
+                type="button"
+                onClick={onCloseWhatsappModal}
+                className={`${WHATSAPP_ACTION_BTN} bg-white/5 border border-white/10 text-gray-400 hover:text-white hover:bg-white/10`}
+              >
+                Close
+              </button>
+            </div>
+          ) : whatsappFlowState === 'idle' ? (
+            <div className="border-t border-white/5 px-10 py-8 space-y-3">
+              <button
+                type="button"
+                onClick={handleConnectWhatsApp}
+                className={`${WHATSAPP_ACTION_BTN} bg-[#1877F2] text-white hover:shadow-[0_0_20px_rgba(24,119,242,0.35)]`}
+              >
+                Connect with Facebook
+              </button>
+              <button
+                type="button"
+                onClick={onCloseWhatsappModal}
+                className={`${WHATSAPP_ACTION_BTN} bg-white/5 border border-white/10 text-gray-400 hover:text-white hover:bg-white/10`}
+              >
+                Cancel
+              </button>
+            </div>
+          ) : null
+        }
       >
-        Feature coming soon.
+        {whatsappFlowState === 'idle' && (
+          <div className="space-y-4">
+            <p>
+              Connect your WhatsApp Business Account through Meta&apos;s secure signup flow.
+              A Facebook login popup will open — complete onboarding there, then this app
+              will finalize the channel on the backend.
+            </p>
+            <p className="text-xs text-gray-500">
+              Organisation: <span className="font-mono text-gray-400">{ORG_ID}</span>
+            </p>
+          </div>
+        )}
+
+        {whatsappFlowState === 'connecting' && (
+          <div className="flex flex-col items-center gap-4 py-6 text-center">
+            <div className="w-8 h-8 border-2 border-[var(--color-ng-primary)]/30 border-t-[var(--color-ng-primary)] rounded-full animate-spin" />
+            <p className="text-white font-medium">Connecting to Meta...</p>
+            <p className="text-xs text-gray-500">Complete signup in the Facebook popup window.</p>
+          </div>
+        )}
+
+        {whatsappFlowState === 'finalizing' && (
+          <div className="flex flex-col items-center gap-4 py-6 text-center">
+            <div className="w-8 h-8 border-2 border-emerald-400/30 border-t-emerald-400 rounded-full animate-spin" />
+            <p className="text-white font-medium">Finalizing setup...</p>
+            <p className="text-xs text-gray-500">Registering your WhatsApp channel with Sentinel.</p>
+          </div>
+        )}
+
+        {whatsappFlowState === 'success' && whatsappSuccess && (
+          <div className="space-y-4">
+            <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-4 text-emerald-300 text-sm">
+              WhatsApp channel connected successfully.
+            </div>
+            <dl className="space-y-3 text-sm">
+              <div>
+                <dt className="text-[10px] font-black uppercase tracking-widest text-gray-500">Phone Number</dt>
+                <dd className="font-mono text-white mt-1">{whatsappSuccess.phoneNumber}</dd>
+              </div>
+              <div>
+                <dt className="text-[10px] font-black uppercase tracking-widest text-gray-500">WABA ID</dt>
+                <dd className="font-mono text-white mt-1">{whatsappSuccess.wabaId}</dd>
+              </div>
+              <div>
+                <dt className="text-[10px] font-black uppercase tracking-widest text-gray-500">Organisation</dt>
+                <dd className="font-mono text-white mt-1">{whatsappSuccess.orgId}</dd>
+              </div>
+            </dl>
+          </div>
+        )}
+
+        {whatsappFlowState === 'error' && (
+          <div className="space-y-4">
+            <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-red-300 text-sm">
+              {whatsappError || 'Something went wrong. Please try again.'}
+            </div>
+            {whatsappError === 'Signup was cancelled or did not complete.' && (
+              <p className="text-xs text-gray-500">
+                No changes were made. You can retry when ready.
+              </p>
+            )}
+          </div>
+        )}
       </NgModal>
     </div>
   );

@@ -4,6 +4,7 @@ import type {
   ConnectWhatsappChannelInput,
   DisconnectWhatsappChannelInput,
   ListWhatsappChannelsQuery,
+  UpdateLandingStorageInput,
 } from "./provisioning.schemas";
 import { ProvisioningService } from "./provisioning.service";
 
@@ -19,6 +20,11 @@ type DisconnectWhatsappChannelRequest = FastifyRequest<{
 
 type ListWhatsappChannelsRequest = FastifyRequest<{
   Querystring: ListWhatsappChannelsQuery;
+}>;
+
+type UpdateLandingStorageRequest = FastifyRequest<{
+  Params: { id: number };
+  Body: UpdateLandingStorageInput;
 }>;
 
 export class ProvisioningController {
@@ -49,6 +55,20 @@ export class ProvisioningController {
         n === 0
           ? `No WhatsApp channels registered for organisation ${result.orgId}.`
           : `Listed ${n} WhatsApp channel(s) for ${result.orgId}.`,
+    });
+  };
+
+  updateChannelLandingStorage = async (request: UpdateLandingStorageRequest, reply: FastifyReply) => {
+    const channelId = Number(request.params.id);
+    if (!Number.isInteger(channelId) || channelId < 1) {
+      throw new AppError(400, "Invalid channel id.", "INVALID_CHANNEL_ID");
+    }
+
+    const result = await this.service.updateChannelLandingStorage(channelId, request.body);
+    return reply.code(200).send({
+      success: true,
+      message: "Landing storage configured for WhatsApp channel.",
+      data: result,
     });
   };
 
