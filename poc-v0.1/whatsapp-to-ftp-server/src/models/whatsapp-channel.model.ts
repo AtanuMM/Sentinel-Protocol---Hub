@@ -10,6 +10,13 @@ export class WhatsappChannel extends Model {
   declare waba_id: string;
   declare phone_number_id: string;
   declare status: string;
+  declare landing_storage_provider: string | null;
+  declare landing_bucket: string | null;
+  declare landing_region: string | null;
+  declare landing_endpoint: string | null;
+  declare landing_kms_key_name: string | null;
+  declare landing_use_ssl: boolean | null;
+  declare landing_port: number | null;
   declare readonly updatedAt: Date;
   declare readonly createdAt: Date;
 }
@@ -55,6 +62,34 @@ export const initWhatsappChannelModel = (sequelize: Sequelize): typeof WhatsappC
         type: DataTypes.STRING(20),
         allowNull: false,
         defaultValue: "ACTIVE",
+      },
+      landing_storage_provider: {
+        type: DataTypes.STRING(20),
+        allowNull: true,
+      },
+      landing_bucket: {
+        type: DataTypes.STRING(255),
+        allowNull: true,
+      },
+      landing_region: {
+        type: DataTypes.STRING(64),
+        allowNull: true,
+      },
+      landing_endpoint: {
+        type: DataTypes.STRING(512),
+        allowNull: true,
+      },
+      landing_kms_key_name: {
+        type: DataTypes.STRING(255),
+        allowNull: true,
+      },
+      landing_use_ssl: {
+        type: DataTypes.BOOLEAN,
+        allowNull: true,
+      },
+      landing_port: {
+        type: DataTypes.INTEGER,
+        allowNull: true,
       },
     },
     {

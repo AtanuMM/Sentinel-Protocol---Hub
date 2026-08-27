@@ -57,6 +57,7 @@ async function runCycle(): Promise<void> {
         scheduledAt: new Date().toISOString(),
         emailAddress: source.email_address ?? undefined,
       }
+      console.log(message, "<<<<<<<<<<<<<< line 60 corn.ts")
       await publishPollJob(message)
       emailPublished++
     }

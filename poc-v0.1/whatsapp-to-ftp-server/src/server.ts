@@ -1,6 +1,6 @@
 import { buildApp } from "./app";
 import { config } from "./config";
-import { producer, redisClient, minioClient } from "./infra/clients";
+import { producer, redisClient } from "./infra/clients";
 import { sequelize } from "./infra/db";
 import {
   startMediaHarvester,
@@ -14,7 +14,6 @@ const assertDependencies = async () => {
   await sequelize.authenticate();
   await redisClient.ping();
   await producer.connect();
-  await minioClient.listBuckets();
 };
 
 const closeResources = async () => {
@@ -35,7 +34,7 @@ const start = async () => {
     await app.listen({ port: config.port, host: config.host });
     app.log.info(
       { service: "whatsapp-to-ftp-server", port: config.port, host: config.host },
-      "Sentinel Protocol whatsapp-to-ftp server started — Meta webhook at /v1/whatsapp/webhook",
+      "Sentinel Protocol whatsapp-to-ftp server started — Meta webhook at /api/v1/whatsapp/webhook",
     );
   } catch (error) {
     if (app) {

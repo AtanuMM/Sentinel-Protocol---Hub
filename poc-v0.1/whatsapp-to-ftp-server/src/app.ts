@@ -31,24 +31,30 @@ export const buildApp = async (): Promise<FastifyInstance> => {
   await app.register(sensible);
   await app.register(cors, { origin: "*" });
   await registerSwagger(app);
-  await app.register(registerHealthRoutes);
-  await app.register(registerWhatsappToFtpPipeline);
+  await app.register(
+    async (v1App) => {
+      await v1App.register(registerHealthRoutes);
+      await v1App.register(registerWhatsappToFtpPipeline);
 
-  app.get("/api/whatsapp-to-ftp", async (_request, reply) =>
-    reply.send({
-      service: "whatsapp-to-ftp-server",
-      openApi: "/documentation",
-      note: "Meta webhook: GET/POST /v1/whatsapp/webhook. Provisioning: POST /api/whatsapp-to-ftp/whatsapp-channel (x-vault-token).",
-    }),
-  );
+      v1App.get("/whatsapp-to-ftp", async (_request, reply) =>
+        reply.send({
+          service: "whatsapp-to-ftp-server",
+          openApi: "/documentation",
+          health: "/api/v1/health",
+          note: "Meta webhook: GET/POST /api/v1/whatsapp/webhook. Provisioning: POST /api/v1/whatsapp-to-ftp/whatsapp-channel (x-vault-token).",
+        }),
+      );
 
-  app.get("/api/_sentinel", async (_request, reply) =>
-    reply.send({
-      service: "whatsapp-to-ftp-server",
-      whatsappWebhook: "/v1/whatsapp/webhook",
-      diagnose404:
-        "If another route 404s: use correct path, and rebuild (npm run build) if you run node dist/.",
-    }),
+      v1App.get("/_sentinel", async (_request, reply) =>
+        reply.send({
+          service: "whatsapp-to-ftp-server",
+          whatsappWebhook: "/api/v1/whatsapp/webhook",
+          diagnose404:
+            "If another route 404s: use correct path, and rebuild (npm run build) if you run node dist/.",
+        }),
+      );
+    },
+    { prefix: "/api/v1" },
   );
 
   return app;

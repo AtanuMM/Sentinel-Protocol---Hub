@@ -1,11 +1,12 @@
 import { randomUUID } from 'crypto'
 import type { Readable } from 'stream'
 import { publishEvent } from './kafka-client'
-import type { KafkaEventPayload, TransferResult, WriteInput } from './types'
+import type { KafkaEventPayload, StorageWriterConfig, TransferResult, WriteInput } from './types'
 import { azureWriterDriver } from './drivers/writer/azure.writer'
 import { gcpWriterDriver } from './drivers/writer/gcp.writer'
 import { minioWriterDriver } from './drivers/writer/minio.writer'
 import { s3WriterDriver } from './drivers/writer/s3.writer'
+import { redactStorageConfig } from './utils/redactStorageConfig'
 
 function buildObjectKey(input: WriteInput): string {
   const date = new Date().toISOString().split('T')[0]
@@ -31,32 +32,37 @@ function buildKafkaPayload(input: WriteInput, result: TransferResult): KafkaEven
   }
 }
 
-export async function writeToLanding(stream: Readable, input: WriteInput): Promise<TransferResult> {
-  const provider = process.env.STORAGE_PROVIDER?.trim().toUpperCase()
-  if (!provider) {
-    throw new Error(
-      'STORAGE_PROVIDER env var is not set. Expected one of: MINIO, S3, GCP, AZURE'
-    )
-  }
+export async function writeToLanding(
+  stream: Readable,
+  input: WriteInput,
+  storageConfig: StorageWriterConfig,
+): Promise<TransferResult> {
   const objectKey = buildObjectKey(input)
+  console.log('[storage-core] writeToLanding payload:', {
+    input,
+    storageConfig: redactStorageConfig(storageConfig),
+    objectKey,
+  })
   let result: TransferResult
-  switch (provider) {
+  switch (storageConfig.provider) {
     case 'MINIO':
-      result = await minioWriterDriver.write(stream, input, objectKey)
+      result = await minioWriterDriver.write(stream, input, objectKey, storageConfig)
       break
     case 'S3':
-      result = await s3WriterDriver.write(stream, input, objectKey)
+      result = await s3WriterDriver.write(stream, input, objectKey, storageConfig)
       break
     case 'GCP':
-      result = await gcpWriterDriver.write(stream, input, objectKey)
+      result = await gcpWriterDriver.write(stream, input, objectKey, storageConfig)
       break
     case 'AZURE':
-      result = await azureWriterDriver.write(stream, input, objectKey)
+      result = await azureWriterDriver.write(stream, input, objectKey, storageConfig)
       break
-    default:
+    default: {
+      const unknownProvider = (storageConfig as { provider?: string }).provider ?? 'unknown'
       throw new Error(
-        `Unsupported STORAGE_PROVIDER "${provider}". Expected one of: MINIO, S3, GCP, AZURE`
+        `Unsupported storage writer provider "${unknownProvider}". Expected one of: MINIO, S3, GCP, AZURE`,
       )
+    }
   }
   try {
     await publishEvent(buildKafkaPayload(input, result))

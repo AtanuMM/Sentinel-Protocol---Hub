@@ -417,17 +417,21 @@ listNewFiles(input)
 ### Writer Driver Architecture
 
 ```
-writeToLanding(stream, input)
-  → process.env.STORAGE_PROVIDER                   // MINIO|S3|GCP|AZURE
+writeToLanding(stream, input, storageConfig)
+  → storageConfig.provider                         // MINIO|S3|GCP|AZURE (explicit param from caller)
   → buildObjectKey(input)
-  → driver.write(stream, input, objectKey)
+  → driver.write(stream, input, objectKey, storageConfig)
   → publishEvent(buildKafkaPayload(...))           // best-effort
 ```
+
+Each host service (poll-orchestrator, ftp-to-ftp-server, whatsapp-to-ftp-server) resolves `storageConfig` from its **own `.env`** via `buildStorageWriterConfig()` and passes it as the third argument. storage-core writer drivers do **not** read landing credentials from `process.env`.
 
 | Provider | Driver file | Status |
 |----------|-------------|--------|
 | MINIO | `drivers/writer/minio.writer.ts` | **Implemented** |
-| S3/GCP/AZURE | respective `*.writer.ts` | Stubs |
+| S3 | `drivers/writer/s3.writer.ts` | **Implemented** |
+| GCP | `drivers/writer/gcp.writer.ts` | Stub |
+| AZURE | `drivers/writer/azure.writer.ts` | Stub |
 
 ### `ReadInput` Fields
 
@@ -507,10 +511,10 @@ Upload succeeds even if Kafka publish fails (logged, not thrown).
 
 | Concern | Control |
 |---------|---------|
-| **Writer** (landing destination) | `STORAGE_PROVIDER` env on worker process |
-| **Reader** (TPA source) | `provider` field inside KMS-stored credential object |
+| **Writer** (landing destination) | `StorageWriterConfig` explicit param — built by each host service from its own `.env` (`STORAGE_PROVIDER`, `AWS_*` or `MINIO_*`) via `buildStorageWriterConfig()` |
+| **Reader** (TPA source) | `sourceCredentials` param — `provider` field inside KMS-stored credential object |
 
-A TPA can store FTP credentials in KMS while Sentinel lands files to MinIO — reader and writer are independently configured.
+A TPA can store FTP credentials in KMS while Sentinel lands files to MinIO — reader and writer are independently configured. Both use explicit parameters into storage-core; neither relies on storage-core reading host env for connection credentials (readers may still use env for IMAP mailbox name / TLS dev flags only).
 
 ---
 

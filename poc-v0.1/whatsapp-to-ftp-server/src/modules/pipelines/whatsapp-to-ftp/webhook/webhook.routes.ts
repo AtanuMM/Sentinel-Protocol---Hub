@@ -6,7 +6,7 @@ export const registerWebhookRoutes = async (app: FastifyInstance): Promise<void>
   const controller = new WebhookController();
 
   app.get(
-    "/v1/whatsapp/webhook",
+    "/whatsapp/webhook",
     {
       schema: {
         tags: [openApiTags.whatsappWebhook],
@@ -28,7 +28,7 @@ export const registerWebhookRoutes = async (app: FastifyInstance): Promise<void>
   );
 
   app.post(
-    "/v1/whatsapp/webhook",
+    "/whatsapp/webhook",
     {
       schema: {
         tags: [openApiTags.whatsappWebhook],
