@@ -17,8 +17,31 @@ import type {
   UpdateLandingStorageInput,
 } from "./provisioning.schemas";
 import type { WhatsappChannel } from "../../../../models/whatsapp-channel.model";
+import { normalizePhoneNumber } from "../../../../utils/phoneNumber";
 
 const META_GRAPH_BASE = "https://graph.facebook.com/v20.0";
+
+type SequelizeFieldError = {
+  path?: string;
+  message?: string;
+  value?: unknown;
+};
+
+function logWhatsappChannelPersistSequelizeErrors(dbErr: unknown): void {
+  const err = dbErr as Error & { name?: string; errors?: SequelizeFieldError[] };
+  if (!Array.isArray(err.errors) || err.errors.length === 0) {
+    return;
+  }
+  console.error("[whatsapp-provisioning] WhatsappChannelModel.create Sequelize errors", {
+    name: err.name,
+    message: err.message,
+    errors: err.errors.map((fieldErr) => ({
+      path: fieldErr.path,
+      message: fieldErr.message,
+      value: fieldErr.value,
+    })),
+  });
+}
 
 function metaErrorMessage(err: unknown): string {
   if (axios.isAxiosError(err) && err.response?.data) {
@@ -85,12 +108,79 @@ function defaultLandingKmsKeyName(channelId: number): string {
   return `landing:whatsapp:${channelId}`;
 }
 
+async function fetchDisplayPhoneNumber(
+  accessToken: string,
+  phoneNumberId: string,
+): Promise<string> {
+  try {
+    const phoneResponse = await axios.get(`${META_GRAPH_BASE}/${phoneNumberId}`, {
+      params: { fields: "display_phone_number" },
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    const displayPhone = phoneResponse.data?.display_phone_number;
+    if (typeof displayPhone !== "string" || !displayPhone.trim()) {
+      throw new AppError(
+        502,
+        `Meta phone display fetch failed: no display_phone_number for phoneNumberId=${phoneNumberId}`,
+        "META_PHONE_DISPLAY_NOT_FOUND",
+      );
+    }
+    return displayPhone.trim();
+  } catch (err) {
+    if (err instanceof AppError) throw err;
+    throw new AppError(
+      502,
+      `Meta phone display fetch failed: ${metaErrorMessage(err)}`,
+      "META_PHONE_DISPLAY_FETCH_FAILED",
+    );
+  }
+}
+
+async function resolveWabaAndPhoneFromGraph(accessToken: string): Promise<{
+  wabaId: string;
+  phoneNumberId: string;
+  phoneNumber: string;
+}> {
+  try {
+    const accountsResponse = await axios.get(`${META_GRAPH_BASE}/me/whatsapp_business_accounts`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    const waba = accountsResponse.data?.data?.[0] as { id?: string } | undefined;
+    if (!waba?.id) {
+      throw new AppError(502, "Meta accounts fetch failed: no WABA found", "META_WABA_NOT_FOUND");
+    }
+    const wabaId = waba.id;
+
+    const phonesResponse = await axios.get(`${META_GRAPH_BASE}/${wabaId}/phone_numbers`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    const phone = phonesResponse.data?.data?.[0] as
+      | { id?: string; display_phone_number?: string }
+      | undefined;
+    if (!phone?.id || !phone?.display_phone_number) {
+      throw new AppError(502, "Meta phone numbers fetch failed: no phone number found", "META_PHONE_NOT_FOUND");
+    }
+
+    return {
+      wabaId,
+      phoneNumberId: phone.id,
+      phoneNumber: phone.display_phone_number,
+    };
+  } catch (err) {
+    if (err instanceof AppError) throw err;
+    throw new AppError(502, `Meta WABA/phone fetch failed: ${metaErrorMessage(err)}`, "META_ACCOUNTS_FETCH_FAILED");
+  }
+}
+
 export class ProvisioningService {
   async connectWhatsappChannel(
     input: ConnectWhatsappChannelInput,
     vaultToken: string,
   ): Promise<{ phoneNumber: string; orgId: string; wabaId: string }> {
     const { orgId, serviceId, zoneId, authorizationCode } = input;
+    const clientWabaId = input.wabaId?.trim();
+    const clientPhoneNumberId = input.phoneNumberId?.trim();
+    const useClientProvidedIds = Boolean(clientWabaId && clientPhoneNumberId);
 
     let accessToken: string;
     try {
@@ -113,30 +203,25 @@ export class ProvisioningService {
     let wabaId: string;
     let phoneNumberId: string;
     let phoneNumber: string;
-    try {
-      const accountsResponse = await axios.get(`${META_GRAPH_BASE}/me/whatsapp_business_accounts`, {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
-      const waba = accountsResponse.data?.data?.[0] as { id?: string } | undefined;
-      if (!waba?.id) {
-        throw new AppError(502, "Meta accounts fetch failed: no WABA found", "META_WABA_NOT_FOUND");
-      }
-      wabaId = waba.id;
 
-      const phonesResponse = await axios.get(`${META_GRAPH_BASE}/${wabaId}/phone_numbers`, {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
-      const phone = phonesResponse.data?.data?.[0] as
-        | { id?: string; display_phone_number?: string }
-        | undefined;
-      if (!phone?.id || !phone?.display_phone_number) {
-        throw new AppError(502, "Meta phone numbers fetch failed: no phone number found", "META_PHONE_NOT_FOUND");
-      }
-      phoneNumberId = phone.id;
-      phoneNumber = phone.display_phone_number;
-    } catch (err) {
-      if (err instanceof AppError) throw err;
-      throw new AppError(502, `Meta WABA/phone fetch failed: ${metaErrorMessage(err)}`, "META_ACCOUNTS_FETCH_FAILED");
+    if (useClientProvidedIds) {
+      wabaId = clientWabaId!;
+      phoneNumberId = clientPhoneNumberId!;
+      phoneNumber = await fetchDisplayPhoneNumber(accessToken, phoneNumberId);
+    } else {
+      const resolved = await resolveWabaAndPhoneFromGraph(accessToken);
+      wabaId = resolved.wabaId;
+      phoneNumberId = resolved.phoneNumberId;
+      phoneNumber = resolved.phoneNumber;
+    }
+
+    phoneNumber = normalizePhoneNumber(phoneNumber);
+    if (!phoneNumber) {
+      throw new AppError(
+        502,
+        "Meta phone display fetch failed: display phone number has no digits",
+        "META_PHONE_DISPLAY_INVALID",
+      );
     }
 
     try {
@@ -186,13 +271,18 @@ export class ProvisioningService {
 
       return { phoneNumber, orgId, wabaId };
     } catch (dbErr) {
+      logWhatsappChannelPersistSequelizeErrors(dbErr);
+
       try {
         await vaultClient.deleteSecret(secretId, vaultToken);
-      } catch {
-        // Swallow rollback errors; the DB error is the primary failure.
+      } catch (rollbackErr) {
+        console.error(
+          "[whatsapp-provisioning] Vault rollback deleteSecret failed after DB persist error",
+          rollbackErr instanceof Error ? rollbackErr.message : rollbackErr,
+        );
       }
 
-      const err = dbErr as Error & { name?: string; errors?: Array<{ path?: string }> };
+      const err = dbErr as Error & { name?: string; errors?: SequelizeFieldError[] };
       if (
         err.name === "SequelizeUniqueConstraintError" &&
         Array.isArray(err.errors) &&

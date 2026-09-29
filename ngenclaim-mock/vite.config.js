@@ -9,7 +9,14 @@ export default defineConfig({
     tailwindcss(),
     basicSsl()
   ],
-  server: { https: true,
-    allowedHosts: ['.ngrok-free.app']
-   }
+  server: {
+    https: true,
+    allowedHosts: ['.ngrok-free.app'],
+    proxy: {
+      '/api/v1/whatsapp-to-ftp': {
+        target: 'http://localhost:3003',
+        changeOrigin: true,
+      },
+    },
+  },
 })

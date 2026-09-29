@@ -11,6 +11,7 @@ export interface UpdateLandingStorageMetadataInput {
   landing_port: number | null;
 }
 
+/** Expects `phoneNumber` already normalized (digits only). Call sites must use normalizePhoneNumber(). */
 export async function findChannelByPhoneNumber(phoneNumber: string): Promise<WhatsappChannel | null> {
   return WhatsappChannelModel.findOne({
     where: {

@@ -6,6 +6,10 @@ const buildHeaders = (vaultToken: string) => ({
   "x-vault-token": vaultToken,
 });
 
+const buildAuthHeaders = (vaultToken: string) => ({
+  "x-vault-token": vaultToken,
+});
+
 export interface VaultSecretListItem {
   keyName: string;
   value: Record<string, unknown> | string;
@@ -105,7 +109,7 @@ export const vaultClient = {
   async deleteSecret(secretId: string, vaultToken: string): Promise<void> {
     try {
       await axios.delete(`${config.vaultUrl}/secrets/by-id/${secretId}`, {
-        headers: buildHeaders(vaultToken),
+        headers: buildAuthHeaders(vaultToken),
       });
     } catch (err) {
       throw new Error(axiosVaultErrorMessage(err));

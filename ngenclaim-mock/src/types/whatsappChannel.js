@@ -4,6 +4,8 @@
  * @property {string} serviceId
  * @property {string} zoneId
  * @property {string} authorizationCode
+ * @property {string} [wabaId]
+ * @property {string} [phoneNumberId]
  */
 
 /**

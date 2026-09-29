@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Link2,
   Key,
@@ -16,14 +16,74 @@ import { useFTPConnections, useEmailSourceConnections } from '../hooks/useIngres
 import { loadFacebookSdk } from '../utils/facebookSdk.js';
 
 const ORG_LABEL = 'ORG: NI-001';
-/** @type {string} Org ID derived from ORG_LABEL display value */
-const ORG_ID = ORG_LABEL.replace(/^ORG:\s*/, '');
-/** PLACEHOLDER — replace with real KMS/vault serviceId before connecting a live client */
-const WHATSAPP_KMS_SERVICE_ID = '00000000-0000-0000-0000-000000000000';
-/** PLACEHOLDER — replace with the organisation's deployment zone before production */
-const WHATSAPP_ZONE_ID = 'eu-central-1';
+
+const NIL_SERVICE_ID = '00000000-0000-0000-0000-000000000000';
+
+/** Meta Embedded Signup — WhatsApp Business app coexistence (see developers.facebook.com onboarding-business-app-users). */
+const DEFAULT_META_FEATURE_TYPE = 'whatsapp_business_app_onboarding';
 
 /** @typedef {'idle' | 'connecting' | 'finalizing' | 'success' | 'error'} WhatsappFlowState */
+
+/** @typedef {{ wabaId: string, phoneNumberId: string }} WhatsappEmbeddedSignupSession */
+
+const META_EMBEDDED_SIGNUP_ORIGINS = new Set([
+  'https://www.facebook.com',
+  'https://web.facebook.com',
+]);
+
+/** Embedded Signup finish events that include waba_id / phone_number_id in data. */
+const META_EMBEDDED_SIGNUP_FINISH_EVENTS = new Set([
+  'FINISH',
+  'FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING',
+]);
+
+/**
+ * @returns {{ orgId: string, serviceId: string, zoneId: string, missing: string[] }}
+ */
+function readWhatsappTenantEnv() {
+  const orgId = import.meta.env.VITE_WHATSAPP_ORG_ID?.trim() ?? '';
+  const serviceId = import.meta.env.VITE_WHATSAPP_SERVICE_ID?.trim() ?? '';
+  const zoneId = import.meta.env.VITE_WHATSAPP_ZONE_ID?.trim() ?? '';
+  const missing = [];
+  if (!orgId) missing.push('VITE_WHATSAPP_ORG_ID');
+  if (!serviceId || serviceId === NIL_SERVICE_ID) missing.push('VITE_WHATSAPP_SERVICE_ID');
+  if (!zoneId) missing.push('VITE_WHATSAPP_ZONE_ID');
+  return { orgId, serviceId, zoneId, missing };
+}
+
+/** @param {string | undefined} rawIngestionUrl */
+function resolveWhatsappIngestionBase(rawIngestionUrl) {
+  const trimmed = rawIngestionUrl?.trim();
+  if (!trimmed) {
+    return '';
+  }
+  return trimmed.replace(/\/$/, '');
+}
+
+/**
+ * Meta may postMessage event.data as a JSON string or a plain object.
+ * @param {unknown} raw
+ * @returns {Record<string, unknown> | null}
+ */
+function parseEmbeddedSignupMessagePayload(raw) {
+  if (raw === null || raw === undefined) {
+    return null;
+  }
+  if (typeof raw === 'string') {
+    try {
+      const parsed = JSON.parse(raw);
+      return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+        ? /** @type {Record<string, unknown>} */ (parsed)
+        : null;
+    } catch {
+      return null;
+    }
+  }
+  if (typeof raw === 'object' && !Array.isArray(raw)) {
+    return /** @type {Record<string, unknown>} */ (raw);
+  }
+  return null;
+}
 
 const WHATSAPP_ACTION_BTN =
   'w-full py-3.5 rounded-xl text-[11px] font-black uppercase tracking-widest transition-all';
@@ -59,6 +119,9 @@ export default function AddChannels() {
   const [whatsappError, setWhatsappError] = useState('');
   /** @type {[import('../types/whatsappChannel.js').ConnectWhatsappChannelData | null, React.Dispatch<React.SetStateAction<import('../types/whatsappChannel.js').ConnectWhatsappChannelData | null>>]} */
   const [whatsappSuccess, setWhatsappSuccess] = useState(null);
+  const [whatsappConnectBusy, setWhatsappConnectBusy] = useState(false);
+  /** @type {React.MutableRefObject<WhatsappEmbeddedSignupSession | null>} */
+  const whatsappEmbeddedSignupSessionRef = useRef(null);
   const [vaultModalOpen, setVaultModalOpen] = useState(false);
   const [vaultForm, setVaultForm] = useState(EMPTY_VAULT_FORM);
   const [toastMessage, setToastMessage] = useState('');
@@ -66,6 +129,56 @@ export default function AddChannels() {
   const { connections: ftpConnections } = useFTPConnections();
   const { connections: emailConnections, refresh: refreshEmailSources } =
     useEmailSourceConnections();
+
+  useEffect(() => {
+    if (!whatsappModalOpen) {
+      return undefined;
+    }
+
+    /** @param {MessageEvent} event */
+    const handleEmbeddedSignupMessage = (event) => {
+      // TEMP DEBUG - remove after diagnosis
+      console.debug('[WhatsApp Embedded Signup] window message (unfiltered)', {
+        origin: event.origin,
+        data: event.data,
+      });
+
+      if (!META_EMBEDDED_SIGNUP_ORIGINS.has(event.origin)) {
+        return;
+      }
+
+      const payload = parseEmbeddedSignupMessagePayload(event.data);
+      if (!payload || payload.type !== 'WA_EMBEDDED_SIGNUP') {
+        return;
+      }
+
+      const finishEvent = typeof payload.event === 'string' ? payload.event : '';
+      if (!META_EMBEDDED_SIGNUP_FINISH_EVENTS.has(finishEvent)) {
+        return;
+      }
+
+      const sessionData = payload.data;
+      if (!sessionData || typeof sessionData !== 'object' || Array.isArray(sessionData)) {
+        return;
+      }
+
+      const sessionRecord = /** @type {Record<string, unknown>} */ (sessionData);
+      const wabaId = typeof sessionRecord.waba_id === 'string' ? sessionRecord.waba_id.trim() : '';
+      const phoneNumberId =
+        typeof sessionRecord.phone_number_id === 'string'
+          ? sessionRecord.phone_number_id.trim()
+          : '';
+
+      if (!wabaId || !phoneNumberId) {
+        return;
+      }
+
+      whatsappEmbeddedSignupSessionRef.current = { wabaId, phoneNumberId };
+    };
+
+    window.addEventListener('message', handleEmbeddedSignupMessage);
+    return () => window.removeEventListener('message', handleEmbeddedSignupMessage);
+  }, [whatsappModalOpen]);
 
   const onCheckLink = () => {
     // TODO: wire to link health-check API
@@ -111,6 +224,8 @@ export default function AddChannels() {
     setWhatsappFlowState('idle');
     setWhatsappError('');
     setWhatsappSuccess(null);
+    setWhatsappConnectBusy(false);
+    whatsappEmbeddedSignupSessionRef.current = null;
   };
 
   const onCloseWhatsappModal = () => {
@@ -124,22 +239,40 @@ export default function AddChannels() {
   };
 
   const handleConnectWhatsApp = async () => {
+    if (whatsappConnectBusy) {
+      return;
+    }
+
+    setWhatsappConnectBusy(true);
+
     const appId = import.meta.env.VITE_META_APP_ID?.trim();
     const configId = import.meta.env.VITE_META_LOGIN_CONFIG_ID?.trim();
+    const metaFeatureType =
+      import.meta.env.VITE_META_FEATURE_TYPE?.trim() || DEFAULT_META_FEATURE_TYPE;
     const vaultToken = import.meta.env.VITE_VAULT_TOKEN?.trim();
-    const ingestionBase = (
-      import.meta.env.VITE_WHATSAPP_INGESTION_URL ?? 'http://localhost:3002'
-    ).replace(/\/$/, '');
+    const ingestionBase = resolveWhatsappIngestionBase(import.meta.env.VITE_WHATSAPP_INGESTION_URL);
+    const { orgId, serviceId, zoneId, missing: missingTenantEnv } = readWhatsappTenantEnv();
 
     if (!appId || !configId) {
       setWhatsappFlowState('error');
       setWhatsappError('Meta App ID and Login Configuration ID must be set in environment variables.');
+      setWhatsappConnectBusy(false);
       return;
     }
 
     if (!vaultToken) {
       setWhatsappFlowState('error');
       setWhatsappError('VITE_VAULT_TOKEN is not configured.');
+      setWhatsappConnectBusy(false);
+      return;
+    }
+
+    if (missingTenantEnv.length > 0) {
+      setWhatsappFlowState('error');
+      setWhatsappError(
+        `Configure before connecting: ${missingTenantEnv.join(', ')}.`,
+      );
+      setWhatsappConnectBusy(false);
       return;
     }
 
@@ -163,7 +296,7 @@ export default function AddChannels() {
             override_default_response_type: true,
             extras: {
               setup: {},
-              featureType: '',
+              featureType: metaFeatureType,
               sessionInfoVersion: '3',
             },
           },
@@ -178,15 +311,34 @@ export default function AddChannels() {
 
       setWhatsappFlowState('finalizing');
 
+      // TEMP DEBUG - remove after diagnosis
+      console.debug('[WhatsApp connect] embedded signup session ref before POST', {
+        ref: whatsappEmbeddedSignupSessionRef.current,
+      });
+
       /** @type {import('../types/whatsappChannel.js').ConnectWhatsappChannelRequest} */
       const payload = {
-        orgId: ORG_ID,
-        serviceId: WHATSAPP_KMS_SERVICE_ID,
-        zoneId: WHATSAPP_ZONE_ID,
+        orgId,
+        serviceId,
+        zoneId,
         authorizationCode,
       };
 
-      const res = await fetch(`${ingestionBase}/api/v1/whatsapp-to-ftp/whatsapp-channel`, {
+      const embeddedSession = whatsappEmbeddedSignupSessionRef.current;
+      if (embeddedSession?.wabaId && embeddedSession?.phoneNumberId) {
+        payload.wabaId = embeddedSession.wabaId;
+        payload.phoneNumberId = embeddedSession.phoneNumberId;
+      }
+
+      const connectUrl = `${ingestionBase}/api/v1/whatsapp-to-ftp/whatsapp-channel`;
+
+      // TEMP DEBUG - remove after diagnosis
+      console.debug('[WhatsApp connect] POST payload (redacted)', {
+        ...payload,
+        authorizationCode: payload.authorizationCode ? '[REDACTED]' : undefined,
+      });
+
+      const res = await fetch(connectUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -195,7 +347,7 @@ export default function AddChannels() {
         body: JSON.stringify(payload),
       });
 
-      /** @type {import('../types/whatsappChannel.js').ConnectWhatsappChannelResponse | import('../types/whatsappChannel.js').ConnectWhatsappChannelErrorResponse} */
+      /** @type {import('../types/whatsappChannel.js').ConnectWhatsappChannelResponse | import('../types/whatsappChannel.js').ConnectWhatsappChannelErrorResponse & { detail?: string }} */
       let data = {};
       try {
         data = await res.json();
@@ -205,9 +357,9 @@ export default function AddChannels() {
 
       if (!res.ok || !data.success) {
         const message =
+          data.detail ||
           data.message ||
           data.error ||
-          data.detail ||
           `Failed to connect WhatsApp channel (${res.status}).`;
         setWhatsappFlowState('error');
         setWhatsappError(typeof message === 'string' ? message : 'Failed to connect WhatsApp channel.');
@@ -219,6 +371,8 @@ export default function AddChannels() {
     } catch (err) {
       setWhatsappFlowState('error');
       setWhatsappError(err instanceof Error ? err.message : 'Something went wrong. Please try again.');
+    } finally {
+      setWhatsappConnectBusy(false);
     }
   };
 
@@ -456,7 +610,8 @@ export default function AddChannels() {
               <button
                 type="button"
                 onClick={handleConnectWhatsApp}
-                className={`${WHATSAPP_ACTION_BTN} bg-[var(--color-ng-primary)] text-[#050810] hover:shadow-[0_0_20px_rgba(0,209,255,0.4)]`}
+                disabled={whatsappConnectBusy}
+                className={`${WHATSAPP_ACTION_BTN} bg-[var(--color-ng-primary)] text-[#050810] hover:shadow-[0_0_20px_rgba(0,209,255,0.4)] disabled:opacity-50 disabled:cursor-not-allowed`}
               >
                 Try Again
               </button>
@@ -473,7 +628,8 @@ export default function AddChannels() {
               <button
                 type="button"
                 onClick={handleConnectWhatsApp}
-                className={`${WHATSAPP_ACTION_BTN} bg-[#1877F2] text-white hover:shadow-[0_0_20px_rgba(24,119,242,0.35)]`}
+                disabled={whatsappConnectBusy}
+                className={`${WHATSAPP_ACTION_BTN} bg-[#1877F2] text-white hover:shadow-[0_0_20px_rgba(24,119,242,0.35)] disabled:opacity-50 disabled:cursor-not-allowed`}
               >
                 Connect with Facebook
               </button>
@@ -496,7 +652,10 @@ export default function AddChannels() {
               will finalize the channel on the backend.
             </p>
             <p className="text-xs text-gray-500">
-              Organisation: <span className="font-mono text-gray-400">{ORG_ID}</span>
+              Organisation:{' '}
+              <span className="font-mono text-gray-400">
+                {import.meta.env.VITE_WHATSAPP_ORG_ID?.trim() || '(set VITE_WHATSAPP_ORG_ID)'}
+              </span>
             </p>
           </div>
         )}

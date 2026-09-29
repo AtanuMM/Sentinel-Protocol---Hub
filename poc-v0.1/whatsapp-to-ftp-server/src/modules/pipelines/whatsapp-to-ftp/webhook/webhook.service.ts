@@ -5,6 +5,7 @@ import { producer, redisClient } from "../../../../infra/clients";
 import { findChannelByPhoneNumber } from "../../../../repositories/whatsappChannel.repository";
 import type { WhatsappChannel } from "../../../../models/whatsapp-channel.model";
 import type { MetaWebhookMessage, MetaWebhookPayload, WhatsappRawEvent } from "../types/webhook";
+import { normalizePhoneNumber } from "../../../../utils/phoneNumber";
 import { verifyMetaSignature } from "./signature";
 
 export interface WhatsappWebhookRequest extends FastifyRequest {
@@ -155,7 +156,11 @@ export async function handleIncomingWebhook(
   for (const entry of payload.entry ?? []) {
     for (const change of entry.changes ?? []) {
       const value = change.value;
-      const displayPhoneNumber = value.metadata?.display_phone_number;
+      const rawDisplayPhoneNumber = value.metadata?.display_phone_number;
+      if (!rawDisplayPhoneNumber) {
+        continue;
+      }
+      const displayPhoneNumber = normalizePhoneNumber(rawDisplayPhoneNumber);
       if (!displayPhoneNumber) {
         continue;
       }
