@@ -7,6 +7,8 @@ export const connectWhatsappChannelBodySchema = {
     serviceId: { type: "string", minLength: 1 },
     zoneId: { type: "string", minLength: 1 },
     authorizationCode: { type: "string", minLength: 1 },
+    wabaId: { type: "string", minLength: 1 },
+    phoneNumberId: { type: "string", minLength: 1 },
   },
 } as const;
 
@@ -41,6 +43,8 @@ export interface ConnectWhatsappChannelInput {
   serviceId: string;
   zoneId: string;
   authorizationCode: string;
+  wabaId?: string;
+  phoneNumberId?: string;
 }
 
 export interface DisconnectWhatsappChannelInput {
